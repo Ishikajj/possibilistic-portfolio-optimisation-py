@@ -1,0 +1,21 @@
+# python
+__pycache__/
+*.py[cod]
+*.so
+*.dylib
+*.pyd
+.venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.coverage
+dist/
+build/
+*.egg-info/
+
+# editors
+.vscode/
+.idea/
+
+# mac
+.DS_Store
