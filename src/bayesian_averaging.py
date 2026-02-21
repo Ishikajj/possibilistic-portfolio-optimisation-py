@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """check data input, fixed windows"""
 
 import numpy as np
@@ -6,7 +8,6 @@ from math import lgamma, log, pi
 import pandas as pd
 from data_input import slice_timeframe, load_industry_portfolios
 
-from __future__ import annotations
 
 from dataclasses import dataclass
 
@@ -92,6 +93,7 @@ def _new_model_prior(
     sum_R: np.ndarray, sum_R2: np.ndarray, t: int
 ) -> tuple[float, float]:
     """Compute the scalar prior hyperparameters for the newborn model at time t.
+    Note that at birth, delta = 1, and since Sigma = delta * Lambda, at birth, both these are identical.
 
     This implements the paper's *common* (across assets) prior for the new model:
     Parameters
@@ -157,17 +159,26 @@ def _update_probs(
     nus: list[float],
     probs: np.ndarray,
 ) -> np.ndarray:
+
+    ##ll is an array of the log of the likelihood functions for each model given our observed returns.
     ll = np.array(
         [
             _log_marginal_likelihood(R_t, mus[m], kappas[m], Lambdas[m], nus[m])
             for m in range(len(mus))
         ]
     )
+
+    # logaddexp basically does log(sum(exp(i))).
+    # since i is our log of probabilities, this is log (sum of probabilities)
+    # so we get the denominator of bayes rule in log space.
     lognum = ll + np.log(np.maximum(probs, 1e-300))
-    logZ = np.logaddexp.reduce(lognum)
+    logZ = np.logaddexp.reduce(
+        lognum
+    )  # logaddexp only takes 2 inputs, reduce applies repeatedly.
+
     p = np.exp(lognum - logZ)
-    p = np.maximum(p, 0.0)
-    return p / p.sum()
+    p = np.maximum(p, 0.0)  # effectively handing cases where the likelihood is -inf
+    return p / p.sum()  # normalise to sum 1.
 
 
 def _log_marginal_likelihood(R_t, mu, kappa, Lambda, nu):
@@ -177,26 +188,35 @@ def _log_marginal_likelihood(R_t, mu, kappa, Lambda, nu):
     log of the multivariate gamma function). We work in logs because Γ_d(a) and the
     NIW normalizing constants can be extremely large/small; log-space avoids overflow
     and turns products/ratios into sums/differences.
+
+    the formulae used here are from anderson cheng section 3.2.
     """
     n = len(R_t)
     k1 = kappa + 1.0
     nu1 = nu + 1.0
     d = R_t - mu
-    L1 = Lambda + (kappa / k1) * np.outer(d, d)
+    L1 = Lambda + (kappa / k1) * np.outer(
+        d, d
+    )  # Paper uses sigma for updates, which has been simplified here to Lambda. this is also why the delta denominator vanishes.
 
-    s0, ld0 = np.linalg.slogdet(Lambda)
+    s0, ld0 = np.linalg.slogdet(
+        Lambda
+    )  # computes the sign, log of determinant of Lambda. Due to PD, this must be +.
     s1, ld1 = np.linalg.slogdet(L1)
     if s0 <= 0 or s1 <= 0:
-        return -np.inf
+        return (
+            -np.inf
+        )  # indicates cases of mathematically imposible covariance matrices.
 
-    return (
+    log_likelihood = (
         multigammaln(nu1 / 2.0, n)
         - multigammaln(nu / 2.0, n)
         + (n / 2.0) * np.log(kappa / k1)
-        + (nu / 2.0) * ld0
+        + (nu / 2.0) * ld0  # determinant was already logged.
         - (nu1 / 2.0) * ld1
         - (n / 2.0) * np.log(np.pi)
     )
+    return log_likelihood
 
 
 def _update_all_models(
@@ -229,22 +249,29 @@ def _ba_moments(
     probs: np.ndarray,
     n: int,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """formulae from section 3.1"""
+
     mu_hat = sum(probs[m] * mus[m] for m in range(len(mus)))
-    S = np.zeros((n, n))
+    Sigma_hat = np.zeros((n, n))
     for m in range(len(mus)):
         Sigma_m = _sigma_m(Lambdas[m], nus[m], n)
         Sigma_bar = (1.0 + 1.0 / kappas[m]) * Sigma_m
-        S += probs[m] * (Sigma_bar + np.outer(mus[m], mus[m]))
-    S -= np.outer(mu_hat, mu_hat)
-    return mu_hat, S
+        Sigma_hat += probs[m] * (Sigma_bar + np.outer(mus[m], mus[m]))
+    Sigma_hat -= np.outer(mu_hat, mu_hat)
+    return mu_hat, Sigma_hat
 
 
 def _sigma_m(Lambda, nu, n):
     return Lambda / (nu - n - 1.0)
 
 
+# return core gets the input from data_input file, it receives a file with integer indexing, a column for time also.
+# this helps you specify the date you want to slice, the source of the data.
 def run_core(returns_df, burn_in=100):
-    R = returns_df.values.astype(float)
+
+    # important to note that a dataframe with the time index is still retained, and can be appended to the end of our produced weight series if needed.
+    R_df = prepare_returns(returns_df, drop_cols=("time", "Other"))
+    R = R_df.values.astype(float)
     T, n = R.shape
 
     mu_hat_arr = np.full((T, n), np.nan)
@@ -265,7 +292,7 @@ def run_core(returns_df, burn_in=100):
         sum_R2 = (R_burn * R_burn).sum(axis=0)
 
     for t in range(burn_obs, T):
-
+        print(f"Processing time step {t} / {T}...")
         mu_bar, lam_bar = _new_model_prior(
             sum_R, sum_R2, t
         )  # Note, this is not using the R[t] yet
@@ -287,16 +314,28 @@ def run_core(returns_df, burn_in=100):
 
         _update_all_models(R_t, mus, kappas, Lambdas, nus)
 
-        sum_R += R_t
-        sum_R2 += R_t**2
-
         mu_hat, Sigma_hat = _ba_moments(mus, kappas, Lambdas, nus, probs, n)
         mu_hat_arr[t] = mu_hat
         sigma_hat_arr[t] = Sigma_hat
 
+        sum_R += R_t
+        sum_R2 += R_t**2
+    print("💡💡💡💡💡💡💡💡💡💡", mu_hat_arr[burn_obs:])
     return {
         "mu_hat": pd.DataFrame(
-            mu_hat_arr, index=returns_df.index, columns=returns_df.columns
+            mu_hat_arr, index=returns_df.index, columns=R_df.columns
         ),
         "sigma_hat": sigma_hat_arr,
     }
+
+
+def main():
+    df = load_industry_portfolios()
+    df_from_1963 = slice_timeframe(df, start_date="2024-01-01")
+    results = run_core(df_from_1963, burn_in=100)
+    print(results["mu_hat"])
+    print(results["sigma_hat"])
+
+
+if __name__ == "__main__":
+    main()

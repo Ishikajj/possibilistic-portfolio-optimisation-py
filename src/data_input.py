@@ -64,6 +64,18 @@ def load_industry_portfolios(
     return df
 
 
+def time_index_to_integer(
+    df: pd.DataFrame,
+    old_index_col: str = "time",
+    int_index_name: str = "t",
+) -> pd.DataFrame:
+    """Convert a time-indexed DataFrame to integer indexing."""
+    out = df.copy()
+    out[old_index_col] = out.index
+    out.index = pd.RangeIndex(start=0, stop=len(out), step=1, name=int_index_name)
+    return out
+
+
 def slice_timeframe(df, start_date="1963-01-01", end_date=None):
     """
     Slice a DataFrame by date index.
@@ -75,19 +87,9 @@ def slice_timeframe(df, start_date="1963-01-01", end_date=None):
     if end_date is not None:
         end_date = pd.to_datetime(end_date)
         df = df.loc[df.index <= end_date]
+    df = df.sort_index()
+    df = time_index_to_integer(df)
     return df
-
-
-def time_index_to_integer(
-    df: pd.DataFrame,
-    old_index_col: str = "time",
-    int_index_name: str = "t",
-) -> pd.DataFrame:
-    """Convert a time-indexed DataFrame to integer indexing."""
-    out = df.copy()
-    out[old_index_col] = out.index
-    out.index = pd.RangeIndex(start=0, stop=len(out), step=1, name=int_index_name)
-    return out
 
 
 if __name__ == "__main__":
@@ -103,3 +105,9 @@ if __name__ == "__main__":
 # each col had value of return for each day, earlier in % base converted to normal number.
 
 # canonical paper used 11 industries: ['NoDur', 'Durbl', 'Manuf', 'Enrgy', 'Chems', 'BusEq', 'Telcm', 'Utils','Shops', 'Hlth', 'Money']
+
+# check data input file again it is weird!!
+
+
+# TODO: fix data input
+# create markowitz, sharpe, profitability, market strat, 1/t strat, notebook
