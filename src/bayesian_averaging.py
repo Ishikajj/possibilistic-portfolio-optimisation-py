@@ -3,169 +3,300 @@
 import numpy as np
 from numpy.linalg import slogdet, inv
 from math import lgamma, log, pi
+import pandas as pd
+from data_input import slice_timeframe, load_industry_portfolios
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import pandas as pd
+from prior_selection import sharing_prior_update
+from scipy.special import multigammaln
 
 
-def multivariate_lgamma(a: float, p: int) -> float:
-    # log multivariate gamma Γ_p(a)
-    return (p * (p - 1) / 4) * log(pi) + sum(
-        lgamma(a + (1 - j) / 2) for j in range(1, p + 1)
+"""step 1
+-> create a new model with mean  = common mean across all previous days and assets, similarly create new delta and k using the +1 update rule. the probability of this model is according to the past models probabilities and our prior used.
+
+step 2
+-> observe returns for the new day
+
+step 3
+-> using the returns, calculate the updated means and covariances using formula 7a and 7b
+
+step 4
+-> using the likelihood function, calculate the updated probabilities of each model. this will require the previous convariance, new covariance, previous delta, new delta, previous k, new k, previous v, new v
+
+step 5
+-> discard the old (sigma, delta ( v - n - 1), k, mean)
+
+step 6
+-> use these updated model probabilities and the updated model variances and means to calculate the expected returns and covariances. store said time indexed series.
+
+step 7
+-> do steps 1-6 until you reach the end of time
+
+short note: 
+
+Weights calculation:
+the time indexed series of bayesian averaged mean and covariances is used to calculate the markowitz weights using a separate function.
+
+this function will return a time indexed series of weights of each assets.
+
+Portfolio return determination:
+using the weights and the returns series that we get, we can run these to calculate the sharpe and profitability each day.
+
+similarly, we can generate a time indexed weights series and pass that to the sharpe and profitability functions each day for comparison.
+
+we take a burn in of 100 days, meaning the first 100 days are used to form the weak prior model with which to start the calculations
+after we have calculated the predicted returns series for the next 100 days, we can then actually start to make investment decisions.
+
+
+for each model, we have its mean, covariance, degrees of freedom k and v, and its probability. as time goes on, the number of models increases. step 1.1 indicates the models of t according to the information available at time t-1
+
+okay so each model uses the probability as a scalar, meaning we can not have different windows across different assets even though that might be a better predictor of mean.
+this is due to having a common covariance matrix across all assets, even if means differ."""
+
+
+"""data input is 
+NoDur           float64
+Durbl           float64
+Manuf           float64
+Enrgy           float64
+Chems           float64
+BusEq           float64
+Telcm           float64
+Utils           float64
+Shops           float64
+Hlth            float64
+Money           float64
+Other           float64
+time           datetime64[ns]
+"""
+
+
+def prepare_returns(
+    df: pd.DataFrame, drop_cols: tuple[str, ...] = ("time", "Other")
+) -> pd.DataFrame:
+    """Return numeric returns-only DataFrame."""
+    out = df.copy()
+    for c in drop_cols:
+        if c in out.columns:
+            out = out.drop(columns=c)
+    out = out.apply(pd.to_numeric, errors="coerce").dropna(how="any")
+    return out
+
+
+def _new_model_prior(
+    sum_R: np.ndarray, sum_R2: np.ndarray, t: int
+) -> tuple[float, float]:
+    """Compute the scalar prior hyperparameters for the newborn model at time t.
+
+    This implements the paper's *common* (across assets) prior for the new model:
+    Parameters
+    ----------
+    sum_R:
+        Running column-wise sum of past returns, shape (n,).
+
+    sum_R2:
+        Running column-wise sum of past squared returns, shape (n,).
+
+    t:
+        Number of past observations included in the running sums.
+        Must satisfy t >= 0.
+
+    Returns
+    -------
+    (mu_bar, lambda_bar):
+        mu_bar is the average across assets of the historical sample means.
+        lambda_bar is the average across assets of the historical sample variances.
+
+    Note:
+    The paper uses t-1 for the mean and t-2 for the variance, this is due to differently defining what the current time period is. mathematically this is equivalent.
+    """
+    if t <= 0:
+        return 0.0, 1e-4
+
+    mu_vec = sum_R / float(t)  # shape (n,)
+    mu_bar = float(mu_vec.mean())
+
+    if t <= 1:
+        # Cannot compute sample variance with < 2 observations.
+        return mu_bar, 1e-4
+
+    # Per-asset sample variance: Var(R_i) = (sum R_i^2 - t * mean_i^2) / (t-1)
+    var_vec = (sum_R2 - t * mu_vec**2) / float(t - 1)
+    var_vec = np.maximum(var_vec, 1e-8)
+    return mu_bar, float(var_vec.mean())
+
+
+def _append_new_model(
+    mus: list[np.ndarray],
+    kappas: list[float],
+    Lambdas: list[np.ndarray],
+    nus: list[float],
+    mu_bar: float,
+    lam_bar: float,
+    n: int,
+) -> None:
+    """takes the previously existing models, and the newly caclulated variance and mean, and appends those to the previously existing models."""
+    mus.append(np.full(n, mu_bar, dtype=float))
+    kappas.append(1.0)
+    Lambdas.append(lam_bar * np.eye(n, dtype=float))
+    nus.append(
+        float(n + 2.0)
+    )  # paper used delta = 1 at initialisation, and delta = nu - n - 1
+
+
+def _update_probs(
+    R_t: np.ndarray,
+    mus: list[np.ndarray],
+    kappas: list[float],
+    Lambdas: list[np.ndarray],
+    nus: list[float],
+    probs: np.ndarray,
+) -> np.ndarray:
+    ll = np.array(
+        [
+            _log_marginal_likelihood(R_t, mus[m], kappas[m], Lambdas[m], nus[m])
+            for m in range(len(mus))
+        ]
     )
+    lognum = ll + np.log(np.maximum(probs, 1e-300))
+    logZ = np.logaddexp.reduce(lognum)
+    p = np.exp(lognum - logZ)
+    p = np.maximum(p, 0.0)
+    return p / p.sum()
 
 
-def niw_posterior_params(
-    X: np.ndarray, mu0: np.ndarray, kappa0: float, nu0: float, Lambda0: np.ndarray
-):
+def _log_marginal_likelihood(R_t, mu, kappa, Lambda, nu):
+    """Log NIW marginal likelihood log L(R_t | m, F_{t-1}).
+
+    Uses `scipy.special.multigammaln(a, d)`, which returns `log Γ_d(a)` (the natural
+    log of the multivariate gamma function). We work in logs because Γ_d(a) and the
+    NIW normalizing constants can be extremely large/small; log-space avoids overflow
+    and turns products/ratios into sums/differences.
     """
-    NIW prior:
-      Σ ~ Inv-Wishart(ν0, Λ0)
-      μ | Σ ~ N(μ0, Σ / κ0)
+    n = len(R_t)
+    k1 = kappa + 1.0
+    nu1 = nu + 1.0
+    d = R_t - mu
+    L1 = Lambda + (kappa / k1) * np.outer(d, d)
 
-    Posterior after observing X (n x p):
-      κn = κ0 + n
-      νn = ν0 + n
-      μn = (κ0 μ0 + n xbar) / κn
-      Λn = Λ0 + S + (κ0 n / κn) (xbar - μ0)(xbar - μ0)'
-    where S = sum (xi - xbar)(xi - xbar)'.
-    """
-    X = np.asarray(X)
-    n, p = X.shape
-    xbar = X.mean(axis=0)
-    Xm = X - xbar
-    S = Xm.T @ Xm  # scatter
-
-    kappa_n = kappa0 + n
-    nu_n = nu0 + n
-    mu_n = (kappa0 * mu0 + n * xbar) / kappa_n
-
-    d = (xbar - mu0).reshape(-1, 1)
-    Lambda_n = Lambda0 + S + (kappa0 * n / kappa_n) * (d @ d.T)
-
-    return mu_n, kappa_n, nu_n, Lambda_n
-
-
-def student_t_logpdf(
-    x: np.ndarray, m: np.ndarray, Sigma: np.ndarray, df: float
-) -> float:
-    """
-    Multivariate Student-t logpdf with location m, scale Sigma, df.
-    """
-    x = np.asarray(x).reshape(-1)
-    m = np.asarray(m).reshape(-1)
-    p = x.size
-
-    delta = (x - m).reshape(-1, 1)
-    Sinv = inv(Sigma)
-    quad = float(delta.T @ Sinv @ delta)
-
-    sign, logdet = slogdet(Sigma)
-    if sign <= 0:
-        raise ValueError("Scale matrix not PD.")
-
-    return (
-        multivariate_lgamma((df + p) / 2, p)
-        - multivariate_lgamma(df / 2, p)
-        - (p / 2) * log(df * pi)
-        - 0.5 * logdet
-        - ((df + p) / 2) * log(1 + quad / df)
-    )
-
-
-def niw_posterior_predictive_logpdf(
-    x: np.ndarray,
-    X: np.ndarray,
-    mu0: np.ndarray,
-    kappa0: float,
-    nu0: float,
-    Lambda0: np.ndarray,
-) -> float:
-    """
-    Predictive is multivariate Student-t:
-      x | X ~ t_{νn - p + 1}(μn, ((κn + 1)/(κn * (νn - p + 1))) Λn )
-    """
-    X = np.asarray(X)
-    n, p = X.shape
-
-    mu_n, kappa_n, nu_n, Lambda_n = niw_posterior_params(X, mu0, kappa0, nu0, Lambda0)
-
-    df = nu_n - p + 1
-    if df <= 2:  # practical sanity
+    s0, ld0 = np.linalg.slogdet(Lambda)
+    s1, ld1 = np.linalg.slogdet(L1)
+    if s0 <= 0 or s1 <= 0:
         return -np.inf
 
-    scale = (kappa_n + 1) / (kappa_n * df) * Lambda_n
-    return student_t_logpdf(x, mu_n, scale, df)
-
-
-def choose_window_by_prequential_score(
-    returns: np.ndarray,
-    windows=(20, 40, 60, 120, 252),
-    mu0=None,
-    kappa0=1.0,
-    nu0=None,
-    Lambda0=None,
-    burn_in=None,
-):
-    """
-    returns: (T,) for univariate OR (T,p) for multivariate.
-    windows: candidate rolling window lengths W.
-    Scores each W by sum_{t=burn_in..T-1} log p(r_t | r_{t-W:t-1}) using NIW.
-    """
-    R = np.asarray(returns)
-    if R.ndim == 1:
-        R = R.reshape(-1, 1)
-    T, p = R.shape
-
-    if mu0 is None:
-        mu0 = np.zeros(p)
-    else:
-        mu0 = np.asarray(mu0).reshape(-1)
-
-    # weakly-informative defaults
-    if nu0 is None:
-        nu0 = p + 2.0  # must be > p-1; small-ish df
-    if Lambda0 is None:
-        Lambda0 = np.eye(p) * 1e-4  # small scale prior
-    if burn_in is None:
-        burn_in = max(windows)
-
-    scores = {}
-    for W in windows:
-        if W < 2 or W >= T:
-            scores[W] = -np.inf
-            continue
-        s = 0.0
-        # start at max(burn_in, W) so every predictive uses full window
-        start = max(burn_in, W)
-        for t in range(start, T):
-            X = R[t - W : t, :]  # window history
-            x = R[t, :]
-            lp = niw_posterior_predictive_logpdf(x, X, mu0, kappa0, nu0, Lambda0)
-            s += lp
-        scores[W] = s
-
-    best_W = max(scores, key=scores.get)
-    return best_W, scores
-
-
-# ---- Example usage ----
-if __name__ == "__main__":
-    # toy: univariate returns
-    rng = np.random.default_rng(0)
-    T = 2000
-    # regime shift to make window selection nontrivial
-    r1 = rng.normal(0.0005, 0.01, size=1200)
-    r2 = rng.normal(0.0002, 0.02, size=800)
-    r = np.concatenate([r1, r2])
-
-    best_W, scores = choose_window_by_prequential_score(
-        r,
-        windows=(20, 40, 60, 120, 252),
-        # prior can be tuned; these are defaultish
-        mu0=np.array([0.0]),
-        kappa0=1.0,
-        nu0=1 + 2.0,  # p=1 => nu0 > 0; keep small
-        Lambda0=np.array([[1e-4]]),
+    return (
+        multigammaln(nu1 / 2.0, n)
+        - multigammaln(nu / 2.0, n)
+        + (n / 2.0) * np.log(kappa / k1)
+        + (nu / 2.0) * ld0
+        - (nu1 / 2.0) * ld1
+        - (n / 2.0) * np.log(np.pi)
     )
 
-    print("best W:", best_W)
-    for W in sorted(scores):
-        print(W, scores[W])
+
+def _update_all_models(
+    R_t: np.ndarray,
+    mus: list[np.ndarray],
+    kappas: list[float],
+    Lambdas: list[np.ndarray],
+    nus: list[float],
+) -> None:
+    for m in range(len(mus)):
+        mus[m], kappas[m], Lambdas[m], nus[m] = _update_niw(
+            R_t, mus[m], kappas[m], Lambdas[m], nus[m]
+        )
+
+
+def _update_niw(R_t, mu, kappa, Lambda, nu):
+    k1 = kappa + 1.0
+    nu1 = nu + 1.0
+    mu1 = (kappa * mu + R_t) / k1
+    d = R_t - mu
+    L1 = Lambda + (kappa / k1) * np.outer(d, d)
+    return mu1, k1, L1, nu1
+
+
+def _ba_moments(
+    mus: list[np.ndarray],
+    kappas: list[float],
+    Lambdas: list[np.ndarray],
+    nus: list[float],
+    probs: np.ndarray,
+    n: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    mu_hat = sum(probs[m] * mus[m] for m in range(len(mus)))
+    S = np.zeros((n, n))
+    for m in range(len(mus)):
+        Sigma_m = _sigma_m(Lambdas[m], nus[m], n)
+        Sigma_bar = (1.0 + 1.0 / kappas[m]) * Sigma_m
+        S += probs[m] * (Sigma_bar + np.outer(mus[m], mus[m]))
+    S -= np.outer(mu_hat, mu_hat)
+    return mu_hat, S
+
+
+def _sigma_m(Lambda, nu, n):
+    return Lambda / (nu - n - 1.0)
+
+
+def run_core(returns_df, burn_in=100):
+    R = returns_df.values.astype(float)
+    T, n = R.shape
+
+    mu_hat_arr = np.full((T, n), np.nan)
+    sigma_hat_arr = np.full((T, n, n), np.nan)
+
+    # mu is the mean for each model, kappa is the precision about the mean
+    # Lambda is the scale parameter for the covariance matrix, and nu is the degrees of freedom.
+    mus, kappas, Lambdas, nus = [], [], [], []
+    probs = np.array([], dtype=float)
+
+    sum_R = np.zeros(n)
+    sum_R2 = np.zeros(n)
+
+    burn_obs = min(int(burn_in), T / 2)
+    if burn_obs > 0:
+        R_burn = R[:burn_obs]
+        sum_R = R_burn.sum(axis=0)
+        sum_R2 = (R_burn * R_burn).sum(axis=0)
+
+    for t in range(burn_obs, T):
+
+        mu_bar, lam_bar = _new_model_prior(
+            sum_R, sum_R2, t
+        )  # Note, this is not using the R[t] yet
+        _append_new_model(mus, kappas, Lambdas, nus, mu_bar, lam_bar, n)
+
+        n_models = t - burn_obs + 1
+
+        assert len(mus) == len(kappas) == len(Lambdas) == len(nus) == n_models
+
+        probs = sharing_prior_update(probs, n_models)
+
+        assert len(probs) == n_models
+
+        # Now, after a new model has been added, it has been given a weak prior based on previous information flow
+        # Only after that we observe the returns for the day.
+        R_t = R[t]
+
+        probs = _update_probs(R_t, mus, kappas, Lambdas, nus, probs)
+
+        _update_all_models(R_t, mus, kappas, Lambdas, nus)
+
+        sum_R += R_t
+        sum_R2 += R_t**2
+
+        mu_hat, Sigma_hat = _ba_moments(mus, kappas, Lambdas, nus, probs, n)
+        mu_hat_arr[t] = mu_hat
+        sigma_hat_arr[t] = Sigma_hat
+
+    return {
+        "mu_hat": pd.DataFrame(
+            mu_hat_arr, index=returns_df.index, columns=returns_df.columns
+        ),
+        "sigma_hat": sigma_hat_arr,
+    }
