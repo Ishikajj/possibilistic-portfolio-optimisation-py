@@ -6,7 +6,7 @@ import numpy as np
 from numpy.linalg import slogdet, inv
 from math import lgamma, log, pi
 import pandas as pd
-from data_input import slice_timeframe, load_industry_portfolios
+from data_input import slice_timeframe, load_excess_returns
 
 
 from dataclasses import dataclass
@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 from prior_selection import sharing_prior_update
 from scipy.special import multigammaln
+from data_input import load_excess_returns, prepare_returns
 
 
 """step 1
@@ -75,18 +76,7 @@ Money           float64
 Other           float64
 time           datetime64[ns]
 """
-
-
-def prepare_returns(
-    df: pd.DataFrame, drop_cols: tuple[str, ...] = ("time", "Other")
-) -> pd.DataFrame:
-    """Return numeric returns-only DataFrame."""
-    out = df.copy()
-    for c in drop_cols:
-        if c in out.columns:
-            out = out.drop(columns=c)
-    out = out.apply(pd.to_numeric, errors="coerce").dropna(how="any")
-    return out
+# TODO: check how they are defining burn in. is it training all together or what?
 
 
 def _new_model_prior(
@@ -267,10 +257,13 @@ def _sigma_m(Lambda, nu, n):
 
 # return core gets the input from data_input file, it receives a file with integer indexing, a column for time also.
 # this helps you specify the date you want to slice, the source of the data.
-def run_core(returns_df, burn_in=100):
+def run_core(
+    returns_df,
+    burn_in=1000,
+):
 
     # important to note that a dataframe with the time index is still retained, and can be appended to the end of our produced weight series if needed.
-    R_df = prepare_returns(returns_df, drop_cols=("time", "Other"))
+    R_df = returns_df.copy()
     R = R_df.values.astype(float)
     T, n = R.shape
 
@@ -285,7 +278,8 @@ def run_core(returns_df, burn_in=100):
     sum_R = np.zeros(n)
     sum_R2 = np.zeros(n)
 
-    burn_obs = min(int(burn_in), T / 2)
+    # burn_obs must be an integer for array slicing
+    burn_obs = min(int(burn_in), T // 2)
     if burn_obs > 0:
         R_burn = R[:burn_obs]
         sum_R = R_burn.sum(axis=0)
@@ -320,7 +314,7 @@ def run_core(returns_df, burn_in=100):
 
         sum_R += R_t
         sum_R2 += R_t**2
-    print("💡💡💡💡💡💡💡💡💡💡", mu_hat_arr[burn_obs:])
+
     return {
         "mu_hat": pd.DataFrame(
             mu_hat_arr, index=returns_df.index, columns=R_df.columns
@@ -330,9 +324,8 @@ def run_core(returns_df, burn_in=100):
 
 
 def main():
-    df = load_industry_portfolios()
-    df_from_1963 = slice_timeframe(df, start_date="2024-01-01")
-    results = run_core(df_from_1963, burn_in=100)
+    df = prepare_returns(load_excess_returns(start_date="1963-01-01"))
+    results = run_core(df, burn_in=100)
     print(results["mu_hat"])
     print(results["sigma_hat"])
 
