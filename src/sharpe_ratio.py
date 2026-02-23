@@ -9,8 +9,8 @@ from typing import Optional
 
 
 def calculate_sharpe_ratio(
-    weights_df: pd.DataFrame,
     returns_df: pd.DataFrame,
+    weights_df: pd.DataFrame,
     scaling_factor: Optional[int] = None,
 ) -> float:
     """Compute daily Sharpe ratio from excess returns and weights."""

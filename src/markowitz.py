@@ -12,19 +12,6 @@ Array2D = (
 )  # shape (T, n) #this is the shape of the mean returns array across time
 
 
-def extract_mu_sigma(
-    mu_sigma_dict: Dict[str, Array2D | Array3D],
-) -> tuple[Array2D, Array3D]:
-    """Extract arrays from dictionary."""
-    mu_hat = mu_sigma_dict["mu_hat"]
-    sigma_hat = mu_sigma_dict["sigma_hat"]
-
-    assert isinstance(mu_hat, np.ndarray)
-    assert isinstance(sigma_hat, np.ndarray)
-
-    return mu_hat, sigma_hat
-
-
 def markowitz_step(
     mu_t: np.ndarray,
     sigma_t: np.ndarray,
@@ -56,15 +43,6 @@ def compute_weights_array(
     return weights
 
 
-def weights_to_dataframe(
-    weights: Array2D,
-    returns_index: pd.Index,
-    asset_columns: pd.Index,
-) -> pd.DataFrame:
-    """Convert weight array to DataFrame."""
-    return pd.DataFrame(weights, index=returns_index, columns=asset_columns)
-
-
 def markowitz_unconstrained(
     mu_sigma_dict: Dict[str, Array2D | Array3D],
     returns_df: pd.DataFrame,
@@ -73,7 +51,7 @@ def markowitz_unconstrained(
     theta: float = 1.0,
 ) -> pd.DataFrame:
     """Full pipeline: extract → compute → return DataFrame."""
-    mu_hat, sigma_hat = extract_mu_sigma(mu_sigma_dict)
+    mu_hat, sigma_hat = mu_sigma_dict["mu_hat"], mu_sigma_dict["sigma_hat"]
 
     weights_array = compute_weights_array(
         mu_hat=mu_hat,
@@ -83,8 +61,6 @@ def markowitz_unconstrained(
         theta=theta,
     )
 
-    return weights_to_dataframe(
-        weights_array,
-        returns_index=returns_df.index,
-        asset_columns=returns_df.columns,
+    return pd.DataFrame(
+        weights_array, index=returns_df.index, columns=returns_df.columns
     )

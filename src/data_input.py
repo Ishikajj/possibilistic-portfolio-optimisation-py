@@ -142,12 +142,20 @@ def load_risk_free_rate(path: Path | None = None) -> pd.DataFrame:
     # Keep only Date and RF
     if "RF" not in df.columns:
         raise KeyError("RF column not found in risk-free rate file.")
-    df = df[["Date", "RF"]]
+    df = df[["Date", "RF", "Mkt-RF"]]
 
-    # Drop missing RF, convert percent->decimal
+    # Convert percent columns to numeric (individually)
     df["RF"] = pd.to_numeric(df["RF"], errors="coerce")
-    df = df.dropna(subset=["Date", "RF"]).sort_values("Date").reset_index(drop=True)
-    df["RF"] = df["RF"] / 100.0
+    df["Mkt-RF"] = pd.to_numeric(df["Mkt-RF"], errors="coerce")
+
+    df = (
+        df.dropna(subset=["Date", "RF", "Mkt-RF"])
+        .sort_values("Date")
+        .reset_index(drop=True)
+    )
+
+    # Percent -> decimal
+    df[["RF", "Mkt-RF"]] = df[["RF", "Mkt-RF"]] / 100.0
     return df
 
 
@@ -162,10 +170,10 @@ def calculate_excess_returns(
     if "Date" not in left.columns or "Date" not in right.columns:
         raise KeyError("Both DataFrames must have a 'Date' column.")
 
-    out = left.merge(right[["Date", "RF"]], on="Date", how="inner")
+    out = left.merge(right[["Date", "RF", "Mkt-RF"]], on="Date", how="inner")
 
     # Subtract RF from each return column (exclude Date, RF, and any metadata columns)
-    exclude = {"Date", "RF"}
+    exclude = {"Date", "RF", "Mkt-RF"}
     ret_cols = [c for c in out.columns if c not in exclude]
     for c in ret_cols:
         out[c] = out[c] - out["RF"]
@@ -227,7 +235,7 @@ def load_excess_returns(
 
 
 def prepare_returns(
-    df: pd.DataFrame, drop_cols: tuple[str, ...] = ("Date", "Other")
+    df: pd.DataFrame, drop_cols: tuple[str, ...] = ("Date", "Other", "RF")
 ) -> pd.DataFrame:
     """Return numeric returns-only DataFrame."""
     out = df.copy()
