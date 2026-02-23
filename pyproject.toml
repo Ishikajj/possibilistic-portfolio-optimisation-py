@@ -5,7 +5,14 @@ description = "Possibilistic portfolio optimisation in Python"
 requires-python = ">=3.11"
 
 # runtime deps
-dependencies = []
+dependencies = [
+    "ipykernel>=7.2.0",
+    "mypy>=1.19.1",
+    "numpy>=2.4.2",
+    "pandas>=3.0.1",
+    "pandas-stubs>=3.0.0.260204",
+    "scipy>=1.17.1",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -20,3 +27,6 @@ target-version = ["py311"]
 [tool.flake8]
 max-line-length = 88
 extend-ignore = ["E203", "W503"]
+
+[tool.mypy]
+follow_untyped_imports = true

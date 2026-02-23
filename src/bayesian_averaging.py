@@ -3,20 +3,18 @@ from __future__ import annotations
 """check data input, fixed windows"""
 
 import numpy as np
+import pandas as pd
 from numpy.linalg import slogdet, inv
 from math import lgamma, log, pi
-import pandas as pd
-from data_input import slice_timeframe, load_excess_returns
-
-
 from dataclasses import dataclass
-
-import numpy as np
-import pandas as pd
 from prior_selection import sharing_prior_update
 from scipy.special import multigammaln
 from data_input import load_excess_returns, prepare_returns
 
+# TODO: main problem is the T^2n^3 complexity of the algorithm, where t is the time steps and n is assets
+# the n^3 remains fixed as the number of assets = 11
+# but T grows monsterly: we have about 70 years of data of 250 trading days each
+# this becomes bad quick
 
 """step 1
 -> create a new model with mean  = common mean across all previous days and assets, similarly create new delta and k using the +1 update rule. the probability of this model is according to the past models probabilities and our prior used.
@@ -286,7 +284,8 @@ def run_core(
         sum_R2 = (R_burn * R_burn).sum(axis=0)
 
     for t in range(burn_obs, T):
-        print(f"Processing time step {t} / {T}...")
+        if t % 100 == 0:
+            print(f"Processing time step {t} / {T}...")
         mu_bar, lam_bar = _new_model_prior(
             sum_R, sum_R2, t
         )  # Note, this is not using the R[t] yet
