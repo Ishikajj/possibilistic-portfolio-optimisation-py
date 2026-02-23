@@ -40,16 +40,16 @@ step 7
 short note: 
 
 Weights calculation:
-the time indexed series of bayesian averaged mean and covariances is used to calculate the markowitz weights using a separate function.
+the integer indexed series of bayesian averaged mean and covariances is used to calculate the markowitz weights using a separate function.
 
-this function will return a time indexed series of weights of each assets.
+this function will return a integer indexed series of weights of each assets.
 
 Portfolio return determination:
 using the weights and the returns series that we get, we can run these to calculate the sharpe and profitability each day.
 
-similarly, we can generate a time indexed weights series and pass that to the sharpe and profitability functions each day for comparison.
+similarly, we can generate a integer indexed weights series and pass that to the sharpe and profitability functions each day for comparison.
 
-we take a burn in of 100 days, meaning the first 100 days are used to form the weak prior model with which to start the calculations
+we take a burn in of 1000 days, meaning the first 1000 days are used to form the weak prior model with which to start the calculations
 after we have calculated the predicted returns series for the next 100 days, we can then actually start to make investment decisions.
 
 
@@ -256,9 +256,9 @@ def _sigma_m(Lambda, nu, n):
 # return core gets the input from data_input file, it receives a file with integer indexing, a column for time also.
 # this helps you specify the date you want to slice, the source of the data.
 def run_core(
-    returns_df,
-    burn_in=1000,
-):
+    returns_df: pd.DataFrame,
+    burn_in: int = 1000,
+) -> dict[str, np.ndarray]:
 
     # important to note that a dataframe with the time index is still retained, and can be appended to the end of our produced weight series if needed.
     R_df = returns_df.copy()
@@ -314,10 +314,9 @@ def run_core(
         sum_R += R_t
         sum_R2 += R_t**2
 
+    # VERY IMPORTANT: the returned mu_hat_arr and sigma_hat_arr have info upto time t, meaning they are predicting t+1.
     return {
-        "mu_hat": pd.DataFrame(
-            mu_hat_arr, index=returns_df.index, columns=R_df.columns
-        ),
+        "mu_hat": mu_hat_arr,
         "sigma_hat": sigma_hat_arr,
     }
 
