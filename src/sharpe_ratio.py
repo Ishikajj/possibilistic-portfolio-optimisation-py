@@ -5,16 +5,45 @@ import numpy as np
 import pandas as pd
 from typing import Optional
 
-
-def certainty_equivalents(a):
-    pass
-
-
 # given a set of weights, excess returns over the market for each said asset, we calculate the sharpe
 # the sharpe ratios are calculated daily.
 # use non annualised and then annualise it.
 
 # basic assumption is that weights at index t are applied to returns at index t+1.
+
+
+def portfolio_returns(
+    returns_df: pd.DataFrame,
+    weights_df: pd.DataFrame,
+    *,
+    lag: int = 1,
+    dropna: bool = True,
+) -> pd.Series:
+    """Compute the portfolio return series implied by weights and asset returns.
+
+    Convention: weights at index t are applied to returns at index t+lag.
+
+    Returns:
+        pd.Series of portfolio returns inno dexed like `weights_df`.
+    """
+    assert isinstance(weights_df, pd.DataFrame)
+    assert isinstance(returns_df, pd.DataFrame)
+    assert isinstance(lag, int) and lag >= 0
+
+    # Align to weights index/columns (enforces same asset set and order)
+    returns_aligned = returns_df.loc[weights_df.index, weights_df.columns]
+
+    # Shift weights so w_{t-1} multiplies r_t
+    shifted_weights = weights_df.shift(lag)
+
+    # Elementwise multiply and sum across assets.
+    # Use skipna=False so any NaN propagates.
+    port = (shifted_weights * returns_aligned).sum(axis=1, skipna=False)
+
+    if dropna:
+        port = port.dropna()
+
+    return port
 
 
 def calculate_sharpe_ratio(
@@ -26,20 +55,10 @@ def calculate_sharpe_ratio(
     assert isinstance(weights_df, pd.DataFrame)
     assert isinstance(returns_df, pd.DataFrame)
 
-    # Align and ensure same columns/order
-    returns_aligned = returns_df.loc[weights_df.index, weights_df.columns]
+    portfolio = portfolio_returns(returns_df, weights_df, lag=1, dropna=True)
 
-    # Shift returns backward so weights_t multiplies returns_{t+1}
-    shifted_returns = returns_aligned.shift(-1)
-
-    # Elementwise multiply and sum across assets
-    portfolio_returns = (weights_df * shifted_returns).sum(axis=1)
-
-    # Drop last NaN (from shift) and any burn-in NaNs
-    portfolio_returns = portfolio_returns.dropna()
-
-    mean_ret: float = float(portfolio_returns.mean())
-    std_ret: float = float(portfolio_returns.std(ddof=1))
+    mean_ret: float = float(portfolio.mean())
+    std_ret: float = float(portfolio.std(ddof=1))
 
     if std_ret == 0.0:
         return 0.0
@@ -54,10 +73,6 @@ def calculate_sharpe_ratio(
     return float(sharpe_annualised)
 
 
-def certainty_equivalents():
-    pass
-
-
 def rolling_sharpe_ratio(
     returns_df: pd.DataFrame,
     weights_df: pd.DataFrame,
@@ -69,12 +84,6 @@ def rolling_sharpe_ratio(
 
     Convention: weights at index t are applied to returns at index t+1.
 
-    Args: Rest of them are same as above.
-        window: Rolling window length (in rows / periods) used to estimate mean and std.
-        min_periods: Minimum periods required to compute rolling stats. Defaults to `window`.
-
-    Returns:
-        pd.Series of rolling Sharpe ratios indexed by time (same index as `weights_df`).
     """
     assert isinstance(weights_df, pd.DataFrame)
     assert isinstance(returns_df, pd.DataFrame)
@@ -84,22 +93,11 @@ def rolling_sharpe_ratio(
         min_periods = window
     assert isinstance(min_periods, int) and 1 <= min_periods <= window
 
-    # Align and ensure same columns/order
-    returns_aligned = returns_df.loc[weights_df.index, weights_df.columns]
-
-    # Shift returns backward so weights_t multiplies returns_{t+1}
-    shifted_returns = returns_aligned.shift(-1)
-
-    # Portfolio return at time t is realised over (t -> t+1]
-    portfolio_returns = (weights_df * shifted_returns).sum(axis=1, skipna=False)
+    portfolio = portfolio_returns(returns_df, weights_df, lag=1, dropna=False)
 
     # Rolling mean/std of portfolio returns
-    rolling_mean = portfolio_returns.rolling(
-        window=window, min_periods=min_periods
-    ).mean()
-    rolling_std = portfolio_returns.rolling(window=window, min_periods=min_periods).std(
-        ddof=1
-    )
+    rolling_mean = portfolio.rolling(window=window, min_periods=min_periods).mean()
+    rolling_std = portfolio.rolling(window=window, min_periods=min_periods).std(ddof=1)
 
     sharpe = rolling_mean / rolling_std
 
@@ -110,3 +108,45 @@ def rolling_sharpe_ratio(
         sharpe = sharpe * np.sqrt(scaling_factor)
 
     return sharpe
+
+
+def certainty_equivalent(
+    returns_df: pd.DataFrame,
+    weights_df: pd.DataFrame,
+    risk_free_df: pd.Series | pd.DataFrame,
+    theta: float = 1.0,
+    *,
+    lag: int = 1,
+    include_rf_in_mean: bool = True,
+) -> float:
+    """Certainty equivalent of the (next-period) portfolio return.
+
+    Uses a mean-variance utility approximation:
+        CE = E[R_p] + E [R_f]- (theta/2) Var(R_p)
+
+    Returns:
+        Scalar certainty equivalent.
+    """
+    assert isinstance(theta, (int, float)) and theta >= 0
+
+    port = portfolio_returns(returns_df, weights_df, lag=lag, dropna=True)
+
+    # Coerce risk-free to a Series
+    if isinstance(risk_free_df, pd.DataFrame):
+        assert risk_free_df.shape[1] == 1
+        rf = risk_free_df.iloc[:, 0]
+    else:
+        rf = risk_free_df
+
+    assert isinstance(rf, pd.Series)
+
+    rf_realized = rf.loc[port.index]
+
+    mean_term = float(port.mean())
+    if include_rf_in_mean:
+        mean_term += float(rf_realized.mean())
+
+    var_term = float(port.var(ddof=1))
+
+    ce = mean_term - (float(theta) / 2.0) * var_term
+    return float(ce)

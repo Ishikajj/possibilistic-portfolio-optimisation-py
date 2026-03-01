@@ -117,7 +117,7 @@ def load_kenneth_french_portfolios(path: Path | None = None) -> pd.DataFrame:
     for c in df.columns:
         if c == "Date":
             continue
-        df[c] = pd.to_numeric(df[c], errors="coerce") / 100.0
+        df[c] = pd.to_numeric(df[c], errors="coerce") / 100
 
     # Drop rows with bad dates
     df = df.dropna(subset=["Date"]).sort_values("Date").reset_index(drop=True)
@@ -156,7 +156,7 @@ def load_risk_free_rate(path: Path | None = None) -> pd.DataFrame:
     )
 
     # Percent -> decimal
-    df[["RF", "Mkt-RF"]] = df[["RF", "Mkt-RF"]] / 100.0
+    df[["RF", "Mkt-RF"]] = df[["RF", "Mkt-RF"]] / 100
     return df
 
 
