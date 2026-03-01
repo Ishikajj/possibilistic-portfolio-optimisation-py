@@ -1,12 +1,7 @@
 from __future__ import annotations
-
-"""check data input, fixed windows"""
-
 import numpy as np
 import pandas as pd
 from numpy.linalg import slogdet, inv
-from math import lgamma, log, pi
-from dataclasses import dataclass
 from prior_selection import sharing_prior_update
 from scipy.special import multigammaln
 from data_input import load_excess_returns, prepare_returns
@@ -15,6 +10,7 @@ from data_input import load_excess_returns, prepare_returns
 # the n^3 remains fixed as the number of assets = 11
 # but T grows monsterly: we have about 70 years of data of 250 trading days each
 # this becomes bad quick
+# Update: 1963-2011, T = 12000 took about 40 minutes.
 
 """step 1
 -> create a new model with mean  = common mean across all previous days and assets, similarly create new delta and k using the +1 update rule. the probability of this model is according to the past models probabilities and our prior used.
@@ -45,13 +41,7 @@ the integer indexed series of bayesian averaged mean and covariances is used to 
 this function will return a integer indexed series of weights of each assets.
 
 Portfolio return determination:
-using the weights and the returns series that we get, we can run these to calculate the sharpe and profitability each day.
-
-similarly, we can generate a integer indexed weights series and pass that to the sharpe and profitability functions each day for comparison.
-
-we take a burn in of 1000 days, meaning the first 1000 days are used to form the weak prior model with which to start the calculations
-after we have calculated the predicted returns series for the next 100 days, we can then actually start to make investment decisions.
-
+using the weights and the returns series that we get, we can run these to calculate the sharpe and certainty equivalents each day.
 
 for each model, we have its mean, covariance, degrees of freedom k and v, and its probability. as time goes on, the number of models increases. step 1.1 indicates the models of t according to the information available at time t-1
 
@@ -74,7 +64,6 @@ Money           float64
 Other           float64
 time           datetime64[ns]
 """
-# TODO: check how they are defining burn in. is it training all together or what?
 
 
 def _new_model_prior(
@@ -190,7 +179,7 @@ def _log_marginal_likelihood(R_t, mu, kappa, Lambda, nu):
     s0, ld0 = np.linalg.slogdet(
         Lambda
     )  # computes the sign, log of determinant of Lambda. Due to PD, this must be +.
-    s1, ld1 = np.linalg.slogdet(L1)
+    s1, ld1 = slogdet(L1)
     if s0 <= 0 or s1 <= 0:
         return (
             -np.inf
@@ -270,7 +259,10 @@ def run_core(
 
     # mu is the mean for each model, kappa is the precision about the mean
     # Lambda is the scale parameter for the covariance matrix, and nu is the degrees of freedom.
-    mus, kappas, Lambdas, nus = [], [], [], []
+    mus: list[np.ndarray] = []
+    kappas: list[float] = []
+    Lambdas: list[np.ndarray] = []
+    nus: list[float] = []
     probs = np.array([], dtype=float)
 
     sum_R = np.zeros(n)
@@ -295,7 +287,7 @@ def run_core(
 
         assert len(mus) == len(kappas) == len(Lambdas) == len(nus) == n_models
 
-        probs = sharing_prior_update(probs, n_models)
+        probs = sharing_prior_update(probs_prev=probs, t_models=n_models, alpha=1.0)
 
         assert len(probs) == n_models
 
@@ -322,7 +314,7 @@ def run_core(
 
 
 def main():
-    df = prepare_returns(load_excess_returns(start_date="1963-01-01"))
+    df = prepare_returns(load_excess_returns(start_date="2020-01-01"))
     results = run_core(df, burn_in=100)
     print(results["mu_hat"])
     print(results["sigma_hat"])

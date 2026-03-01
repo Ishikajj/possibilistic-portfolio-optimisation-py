@@ -34,7 +34,7 @@ def compute_weights_array(
     T, n = mu_hat.shape
     weights = np.full((T, n), np.nan)
 
-    # we compute weights for until T-1 only since the predictions we receive are for t-1.
+    # we compute weights for until T-1 only since the predictions we receive contain info upto time T.
     for t in range(burn_in + periods_until_investment, T - 1):
         if np.isnan(mu_hat[t]).any():
             continue
