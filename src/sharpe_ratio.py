@@ -6,10 +6,10 @@ import pandas as pd
 from typing import Optional
 
 
-def certainty_equivalents(*):
+def certainty_equivalents(a):
     pass
 
-    
+
 # given a set of weights, excess returns over the market for each said asset, we calculate the sharpe
 # the sharpe ratios are calculated daily.
 # use non annualised and then annualise it.
@@ -91,7 +91,7 @@ def rolling_sharpe_ratio(
     shifted_returns = returns_aligned.shift(-1)
 
     # Portfolio return at time t is realised over (t -> t+1]
-    portfolio_returns = (weights_df * shifted_returns).sum(axis=1)
+    portfolio_returns = (weights_df * shifted_returns).sum(axis=1, skipna=False)
 
     # Rolling mean/std of portfolio returns
     rolling_mean = portfolio_returns.rolling(

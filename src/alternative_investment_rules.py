@@ -369,7 +369,7 @@ def kan_zhou_three_fund_estimates(
         term2_num = 2.0 * (psi_t**a) * ((1.0 + psi_t) ** (-b))
         term2 = (1.0 / (w * B_t)) * term2_num
         epsilon_t = term1 + term2
-        if not np.isfinite(xi_t):
+        if not np.isfinite(epsilon_t):
             continue
 
         v_t = n / (w * epsilon_t + n)

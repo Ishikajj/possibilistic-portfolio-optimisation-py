@@ -7,6 +7,8 @@ requires-python = ">=3.11"
 # runtime deps
 dependencies = [
     "ipykernel>=7.2.0",
+    "matplotlib>=3.10.8",
+    "mpmath>=1.4.0",
     "mypy>=1.19.1",
     "numpy>=2.4.2",
     "pandas>=3.0.1",

@@ -1,10 +1,10 @@
 from __future__ import annotations
 import numpy as np
 import pandas as pd
-from numpy.linalg import slogdet, inv
+from numpy.linalg import slogdet
 from prior_selection import sharing_prior_update
 from scipy.special import multigammaln
-from data_input import load_excess_returns, prepare_returns
+from data_input import load_excess_returns_from_kenneth_french_path, prepare_returns
 
 # TODO: main problem is the T^2n^3 complexity of the algorithm, where t is the time steps and n is assets
 # the n^3 remains fixed as the number of assets = 11
@@ -13,7 +13,9 @@ from data_input import load_excess_returns, prepare_returns
 # Update: 1963-2011, T = 12000 took about 40 minutes.
 
 """step 1
--> create a new model with mean  = common mean across all previous days and assets, similarly create new delta and k using the +1 update rule. the probability of this model is according to the past models probabilities and our prior used.
+-> create a new model with mean  = common mean across all previous days and assets,
+ similarly create new delta and k using the +1 update rule.
+ the probability of this model is according to the past models probabilities and our prior used.
 
 step 2
 -> observe returns for the new day
@@ -33,7 +35,7 @@ step 6
 step 7
 -> do steps 1-6 until you reach the end of time
 
-short note: 
+short note:
 
 Weights calculation:
 the integer indexed series of bayesian averaged mean and covariances is used to calculate the markowitz weights using a separate function.
@@ -49,7 +51,7 @@ okay so each model uses the probability as a scalar, meaning we can not have dif
 this is due to having a common covariance matrix across all assets, even if means differ."""
 
 
-"""data input is 
+"""data input is
 NoDur           float64
 Durbl           float64
 Manuf           float64
@@ -92,7 +94,8 @@ def _new_model_prior(
         lambda_bar is the average across assets of the historical sample variances.
 
     Note:
-    The paper uses t-1 for the mean and t-2 for the variance, this is due to differently defining what the current time period is. mathematically this is equivalent.
+    The paper uses t-1 for the mean and t-2 for the variance, this is due to differently defining what the current time period is.
+    mathematically this is equivalent.
     """
     if t <= 0:
         return 0.0, 1e-4
@@ -137,10 +140,16 @@ def _update_probs(
     probs: np.ndarray,
 ) -> np.ndarray:
 
-    ##ll is an array of the log of the likelihood functions for each model given our observed returns.
+    # ll is an array of the log of the likelihood functions for each model given our observed returns.
     ll = np.array(
         [
-            _log_marginal_likelihood(R_t, mus[m], kappas[m], Lambdas[m], nus[m])
+            _log_marginal_likelihood(
+                R_t,
+                mus[m],
+                kappas[m],
+                Lambdas[m],
+                nus[m],
+            )
             for m in range(len(mus))
         ]
     )
@@ -314,7 +323,9 @@ def run_core(
 
 
 def main():
-    df = prepare_returns(load_excess_returns(start_date="2020-01-01"))
+    df = prepare_returns(
+        load_excess_returns_from_kenneth_french_path(start_date="2020-01-01")
+    )
     results = run_core(df, burn_in=100)
     print(results["mu_hat"])
     print(results["sigma_hat"])
