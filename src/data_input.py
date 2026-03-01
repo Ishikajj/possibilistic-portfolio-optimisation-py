@@ -16,8 +16,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 from io import StringIO
-
+import numpy as np
 import pandas as pd
+import numpy as np
 
 # Paths (relative to this file)
 DATA_PATH = (
@@ -206,7 +207,7 @@ def slice_timeframe(
     return out.sort_values("Date").reset_index(drop=True)
 
 
-def load_excess_returns(
+def load_excess_returns_from_kenneth_french_path(
     portfolios_path: Path | str = DATA_PATH,
     risk_free_path: Path | str = RISK_FREE_RATE_PATH,
     start_date: str | None = None,
