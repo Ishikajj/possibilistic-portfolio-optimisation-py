@@ -150,3 +150,7 @@ def certainty_equivalent(
 
     ce = mean_term - (float(theta) / 2.0) * var_term
     return float(ce)
+
+
+# neg log likelohood for assessmnet
+# mahalanobis for assessment.

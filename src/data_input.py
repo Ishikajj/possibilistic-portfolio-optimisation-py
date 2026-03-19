@@ -251,7 +251,7 @@ if __name__ == "__main__":
     df_risk_free = load_risk_free_rate()
     print(df_risk_free.head())
     print(df_risk_free.shape)
-    df = load_excess_returns(DATA_PATH, RISK_FREE_RATE_PATH)
+    df = load_excess_returns_from_kenneth_french_path(DATA_PATH, RISK_FREE_RATE_PATH)
     print(df.head())
     print(df.columns)
     print(df.dtypes)

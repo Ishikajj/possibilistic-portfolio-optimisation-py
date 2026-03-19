@@ -100,7 +100,9 @@ def _new_model_prior(
     if t <= 0:
         return 0.0, 1e-4
 
-    mu_vec = sum_R / float(t)  # shape (n,)
+    mu_vec = sum_R / (
+        float(t) - 1
+    )  # shape (n,), only information until t-1 is used to form the new models priors.
     mu_bar = float(mu_vec.mean())
 
     if t <= 1:
@@ -108,7 +110,7 @@ def _new_model_prior(
         return mu_bar, 1e-4
 
     # Per-asset sample variance: Var(R_i) = (sum R_i^2 - t * mean_i^2) / (t-1)
-    var_vec = (sum_R2 - t * mu_vec**2) / float(t - 1)
+    var_vec = (sum_R2 - t * mu_vec**2) / float(t - 2)
     var_vec = np.maximum(var_vec, 1e-8)
     return mu_bar, float(var_vec.mean())
 
@@ -251,11 +253,79 @@ def _sigma_m(Lambda, nu, n):
     return Lambda / (nu - n - 1.0)
 
 
+def _prune_models(
+    mus: list[np.ndarray],
+    kappas: list[float],
+    Lambdas: list[np.ndarray],
+    nus: list[float],
+    probs: np.ndarray,
+    prune_threshold: float = 1e-6,
+    max_models: int | None = 2000,
+    keep_newest: bool = True,
+) -> tuple[
+    list[np.ndarray],
+    list[float],
+    list[np.ndarray],
+    list[float],
+    np.ndarray,
+]:
+    """Prune low-probability models to keep runtime sub-quadratic in T.
+
+    Strategy:
+    - drop models with posterior probability below `prune_threshold`
+    - optionally cap the total number of retained models at `max_models`
+    - optionally force retention of the newest model (last index)
+
+    After pruning, probabilities are renormalized to sum to 1.
+    """
+    n_models = len(mus)
+
+    keep_mask = probs >= prune_threshold
+    if keep_newest:
+        keep_mask[-1] = True
+
+    keep_idx = np.flatnonzero(keep_mask)
+    if keep_idx.size == 0:
+        fallback_count = n_models if max_models is None else min(n_models, max_models)
+        keep_idx = np.arange(n_models - fallback_count, n_models, dtype=int)
+
+    if max_models is not None and keep_idx.size > max_models:
+        order = np.argsort(probs[keep_idx])[
+            ::-1
+        ]  # sorts by descending the probabilities.
+        keep_idx = keep_idx[order[:max_models]]
+        keep_idx = np.sort(keep_idx)
+        if keep_newest and keep_idx[-1] != n_models - 1:
+            keep_idx[-1] = n_models - 1
+            keep_idx = np.unique(np.sort(keep_idx))
+            if keep_idx.size > max_models:
+                drop_candidates = keep_idx[keep_idx != n_models - 1]
+                smallest = drop_candidates[np.argmin(probs[drop_candidates])]
+                keep_idx = keep_idx[keep_idx != smallest]
+
+    mus = [mus[i] for i in keep_idx]
+    kappas = [kappas[i] for i in keep_idx]
+    Lambdas = [Lambdas[i] for i in keep_idx]
+    nus = [nus[i] for i in keep_idx]
+    probs = probs[keep_idx].astype(float, copy=False)
+
+    prob_sum = probs.sum()
+    if prob_sum <= 0.0:
+        probs = np.full(len(probs), 1.0 / len(probs))
+    else:
+        probs = probs / prob_sum
+
+    return mus, kappas, Lambdas, nus, probs
+
+
 # return core gets the input from data_input file, it receives a file with integer indexing, a column for time also.
 # this helps you specify the date you want to slice, the source of the data.
 def run_core(
     returns_df: pd.DataFrame,
     burn_in: int = 1000,
+    prune_threshold: float = 1e-6,
+    max_models: int | None = 2000,
+    keep_newest: bool = True,
 ) -> dict[str, np.ndarray]:
 
     # important to note that a dataframe with the time index is still retained, and can be appended to the end of our produced weight series if needed.
@@ -292,13 +362,9 @@ def run_core(
         )  # Note, this is not using the R[t] yet
         _append_new_model(mus, kappas, Lambdas, nus, mu_bar, lam_bar, n)
 
-        n_models = t - burn_obs + 1
-
-        assert len(mus) == len(kappas) == len(Lambdas) == len(nus) == n_models
+        n_models = len(mus)
 
         probs = sharing_prior_update(probs_prev=probs, t_models=n_models, alpha=1.0)
-
-        assert len(probs) == n_models
 
         # Now, after a new model has been added, it has been given a weak prior based on previous information flow
         # Only after that we observe the returns for the day.
@@ -307,6 +373,17 @@ def run_core(
         probs = _update_probs(R_t, mus, kappas, Lambdas, nus, probs)
 
         _update_all_models(R_t, mus, kappas, Lambdas, nus)
+
+        mus, kappas, Lambdas, nus, probs = _prune_models(
+            mus,
+            kappas,
+            Lambdas,
+            nus,
+            probs,
+            prune_threshold=prune_threshold,
+            max_models=max_models,
+            keep_newest=keep_newest,
+        )
 
         mu_hat, Sigma_hat = _ba_moments(mus, kappas, Lambdas, nus, probs, n)
         mu_hat_arr[t] = mu_hat
