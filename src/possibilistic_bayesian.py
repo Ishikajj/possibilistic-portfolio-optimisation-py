@@ -409,7 +409,6 @@ def run_core(
 
     mu_hat_arr = np.full((T, n), np.nan)
     sigma_hat_arr = np.full((T, n, n), np.nan)
-    possibility_arr = np.full((T, T - min(int(burn_in), T // 2) + 1), np.nan)
 
     mus: list[np.ndarray] = []
     kappas: list[float] = []
@@ -461,7 +460,6 @@ def run_core(
         )
         mu_hat_arr[t] = mu_hat
         sigma_hat_arr[t] = Sigma_hat
-        possibility_arr[t, : len(possibilities)] = possibilities
 
         sum_R += R_t
         sum_R2 += R_t**2
@@ -469,7 +467,6 @@ def run_core(
     return {
         "mu_hat": mu_hat_arr,
         "sigma_hat": sigma_hat_arr,
-        "possibility": possibility_arr,
     }
 
 
@@ -480,7 +477,6 @@ def main():
     results = run_core(df, burn_in=100)
     print(results["mu_hat"])
     print(results["sigma_hat"])
-    print(results["possibility"])
 
 
 if __name__ == "__main__":

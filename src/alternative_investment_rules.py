@@ -3,6 +3,9 @@ import pandas as pd
 from markowitz import markowitz_unconstrained
 from typing import Optional
 
+
+# all functions below already return weight dataframes.
+# this means we can directly implement portfolio returns > all dem thangs.
 try:
     # Preferred: fast special functions
     from scipy.special import (
