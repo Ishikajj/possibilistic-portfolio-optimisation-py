@@ -133,7 +133,7 @@ def _append_new_model(
     mus.append(np.full(n, mu_bar, dtype=float))
     kappas.append(1.0)
     Lambdas.append(lam_bar * np.eye(n, dtype=float))
-    nus.append(float(0.0))  # from our initial proof
+    nus.append(float(n + 2))  # from our initial proof
 
     if possibilities.size == 0:
         return np.array([1.0], dtype=float)
