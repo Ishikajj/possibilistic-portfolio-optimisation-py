@@ -150,7 +150,6 @@ def _log_hbar(
     y: np.ndarray,
     mu: np.ndarray,
     Sigma: np.ndarray,
-    sigma_floor: float,
 ) -> float:
     """Log normalized Gaussian likelihood.
 
@@ -159,13 +158,17 @@ def _log_hbar(
     supremum achieved at mu = y and Sigma = sigma_floor * I.
     """
     n = len(y)
-    log_h = _log_normal_likelihood(y, mu, Sigma)
+
+    diff = y - mu
+    try:
+        quad = float(diff.T @ np.linalg.solve(Sigma, diff))
+    except LinAlgError:
+        return -np.inf
+    log_h = -0.5 * quad
     if not np.isfinite(log_h):
         return -np.inf
 
-    log_sup = -0.5 * (n * np.log(2.0 * np.pi) + n * np.log(sigma_floor))
-    log_hbar = log_h - log_sup
-    return min(log_hbar, 0.0)
+    return min(log_h, 0.0)
 
 
 # correct
@@ -202,10 +205,9 @@ def _bracket_value(
     kappa: float,
     Lambda: np.ndarray,
     nu: float,
-    sigma_floor: float,
 ) -> float:
     """Evaluate (1 - h_bar) f_bar at a deterministic candidate point."""
-    log_hbar = _log_hbar(y_next, mu, Sigma, sigma_floor)
+    log_hbar = _log_hbar(y_next, mu, Sigma)
     log_fbar = _log_fbar(mu, Sigma, mu0, kappa, Lambda, nu)
     if not (np.isfinite(log_hbar) and np.isfinite(log_fbar)):
         return 0.0
@@ -302,7 +304,6 @@ def _hybrid_initial_thetas(
             kappa=kappa,
             Lambda=Lambda,
             nu=nu,
-            sigma_floor=sigma_floor,
         )
 
     order = np.argsort(values)[::-1]
@@ -348,7 +349,7 @@ def _raw_internal_validity_score_deterministic(
 
     def objective(theta: np.ndarray) -> float:
         mu, Sigma = _unpack_theta(theta, n=n, ridge=sigma_floor)
-        value = _bracket_value(mu, Sigma, y_next, mu0, kappa, Lambda, nu, sigma_floor)
+        value = _bracket_value(mu, Sigma, y_next, mu0, kappa, Lambda, nu)
         return -value
 
     # gets a few start values (of mu and sigma, given our lambda, mu0 , kappa) depending on the number of samples
@@ -378,7 +379,13 @@ def _raw_internal_validity_score_deterministic(
         for theta in candidate_thetas:
             mu, Sigma = _unpack_theta(theta, n=n, ridge=sigma_floor)
             value = _bracket_value(
-                mu, Sigma, y_next, mu0, kappa, Lambda, nu, sigma_floor
+                mu,
+                Sigma,
+                y_next,
+                mu0,
+                kappa,
+                Lambda,
+                nu,
             )
             best_value = max(best_value, value)
 
