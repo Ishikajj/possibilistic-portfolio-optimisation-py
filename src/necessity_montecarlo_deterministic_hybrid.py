@@ -151,13 +151,7 @@ def _log_hbar(
     mu: np.ndarray,
     Sigma: np.ndarray,
 ) -> float:
-    """Log normalized Gaussian likelihood.
-
-    The unconstrained supremum over (mu, Sigma) is not finite because Sigma can
-    collapse to zero at mu = y. We therefore normalize relative to the constrained
-    supremum achieved at mu = y and Sigma = sigma_floor * I.
-    """
-    n = len(y)
+    """Log normalized Gaussian likelihood."""
 
     diff = y - mu
     try:

@@ -17,5 +17,9 @@ build/
 .vscode/
 .idea/
 
+#working files
+src/testing_data_input.ipynb
+src/necessity_calculation.py
+
 # mac
 .DS_Store
