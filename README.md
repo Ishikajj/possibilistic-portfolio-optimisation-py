@@ -159,13 +159,6 @@ source .venv/bin/activate
 pip install ipykernel matplotlib mpmath mypy numpy pandas pandas-stubs scipy
 ```
 
-### Important import-path note
-
-The modules in `possibilistic-portfolio-optimisation-py/src` use direct imports such as `from markowitz import ...`, so the easiest ways to run the code are:
-
-1. run notebooks or scripts with the working directory set to `possibilistic-portfolio-optimisation-py/src`, or
-2. add `possibilistic-portfolio-optimisation-py/src` to `PYTHONPATH`
-
 ### `possibilistic-portfolio-optimisation-py/src/`
 
 - [`alternative_investment_rules.py`](src/alternative_investment_rules.py): benchmark and shrinkage-based portfolio rules
