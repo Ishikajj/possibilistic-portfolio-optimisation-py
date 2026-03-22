@@ -213,7 +213,9 @@ def _bracket_value(
     h_bar = float(np.exp(log_hbar))
     f_bar = float(np.exp(log_fbar))
     value = (1.0 - h_bar) * f_bar
-    return min(max(value, 0.0), 1.0)
+    return min(
+        max(value, 0.0), 1.0
+    )  # make sure the value in the bracket is between 1 and 0.
 
 
 # makes sense
@@ -367,9 +369,12 @@ def _raw_internal_validity_score_deterministic(
         res = minimize(objective, theta0, method="L-BFGS-B")
 
         candidate_thetas = [theta0]
+
+        # res function finds some local optimizers of (1 - h) f
         if res.success and np.all(np.isfinite(res.x)):
             candidate_thetas.append(res.x)
 
+        # for each of these candidates, calculate the bracket value, and update it. to note that the maximiser is not used, only the maximised value
         for theta in candidate_thetas:
             mu, Sigma = _unpack_theta(theta, n=n, ridge=sigma_floor)
             value = _bracket_value(
@@ -434,6 +439,88 @@ def necessity_scores_deterministic(
     return raw_scores
 
 
+# ------------------- New weighting functions -------------------
+
+
+def deterministic_mask_weighting(
+    necessities: np.ndarray,
+    possibilities: np.ndarray,
+) -> np.ndarray:
+    """Apply the deterministic 1{V_m > 0} mask to existing possibilities.
+
+    This function does not compute necessity scores itself. It expects model-wise
+    necessity scores that have already been computed, then masks the supplied
+    possibilities and normalizes the result to have supremum one.
+    """
+    necessities = np.asarray(necessities, dtype=float)
+    possibilities = np.asarray(possibilities, dtype=float)
+
+    if len(necessities) != len(possibilities):
+        raise ValueError("necessities and possibilities must have the same length.")
+
+    validity_mask = (necessities > 0.0).astype(float)
+    adjusted = validity_mask * possibilities
+    max_adjusted = adjusted.max(initial=0.0)
+    if max_adjusted <= 0.0:
+        return np.ones_like(adjusted)
+    return adjusted / max_adjusted
+
+
+def power_weighting(
+    necessities: np.ndarray,
+    possibilities: np.ndarray,
+    gamma: float = 1.0,
+    epsilon: float = 0.0,
+) -> np.ndarray:
+    """Apply soft power weighting using precomputed necessity scores.
+
+    The adjusted possibilities are proportional to
+        possibilities_m * (necessities_m + epsilon) ** gamma
+    and are then normalized to have supremum one.
+    """
+    necessities = np.asarray(necessities, dtype=float)
+    possibilities = np.asarray(possibilities, dtype=float)
+
+    if len(necessities) != len(possibilities):
+        raise ValueError("necessities and possibilities must have the same length.")
+    if gamma <= 0.0:
+        raise ValueError("gamma must be strictly positive.")
+    if epsilon < 0.0:
+        raise ValueError("epsilon must be nonnegative.")
+
+    adjusted = possibilities * np.power(np.maximum(necessities, 0.0) + epsilon, gamma)
+    max_adjusted = adjusted.max(initial=0.0)
+    if max_adjusted <= 0.0:
+        return np.ones_like(adjusted)
+    return adjusted / max_adjusted
+
+
+def exponential_penalty_weighting(
+    necessities: np.ndarray,
+    possibilities: np.ndarray,
+    eta: float = 1.0,
+) -> np.ndarray:
+    """Apply exponential penalization using precomputed necessity scores.
+
+    The adjusted possibilities are proportional to
+        possibilities_m * exp(-eta * (1 - necessities_m))
+    and are then normalized to have supremum one.
+    """
+    necessities = np.asarray(necessities, dtype=float)
+    possibilities = np.asarray(possibilities, dtype=float)
+
+    if len(necessities) != len(possibilities):
+        raise ValueError("necessities and possibilities must have the same length.")
+    if eta < 0.0:
+        raise ValueError("eta must be nonnegative.")
+
+    adjusted = possibilities * np.exp(-eta * (1.0 - np.maximum(necessities, 0.0)))
+    max_adjusted = adjusted.max(initial=0.0)
+    if max_adjusted <= 0.0:
+        return np.ones_like(adjusted)
+    return adjusted / max_adjusted
+
+
 def necessity_weighted_possibilities_deterministic(
     y_next: np.ndarray,
     mus: list[np.ndarray],
@@ -447,11 +534,11 @@ def necessity_weighted_possibilities_deterministic(
     top_k: int = 0,
     random_state: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Combine hybrid necessity scores with current possibilities.
+    """Compute necessity scores and apply deterministic mask weighting.
 
-    The corrected thesis weighting rule uses the indicator 1{V_m > 0}. So the
-    adjusted possibilities are the current possibilities masked by positive
-    necessity and then normalized to have supremum one.
+    This wrapper first computes model-wise deterministic necessity scores and
+    then applies the 1{V_m > 0} weighting rule through
+    `deterministic_mask_weighting(...)`.
     """
     possibilities = np.asarray(possibilities, dtype=float)
     necessities = necessity_scores_deterministic(
@@ -466,15 +553,5 @@ def necessity_weighted_possibilities_deterministic(
         random_state=random_state,
     )
 
-    if len(necessities) != len(possibilities):
-        raise ValueError("necessities and possibilities must have the same length.")
-
-    validity_mask = (necessities > 0.0).astype(float)
-    adjusted = validity_mask * possibilities
-    max_adjusted = adjusted.max(initial=0.0)
-    if max_adjusted <= 0.0:
-        adjusted = np.ones_like(adjusted)
-    else:
-        adjusted = adjusted / max_adjusted
-
+    adjusted = deterministic_mask_weighting(necessities, possibilities)
     return necessities, adjusted
