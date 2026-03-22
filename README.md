@@ -144,16 +144,16 @@ When `include_rf_in_mean=False`, the `\mathbb{E}[R_f]` term is omitted.
 From the repository root:
 
 ```bash
-cd dev
+cd possibilistic-portfolio-optimisation-py
 uv sync
 ```
 
-This installs the dependencies declared in [`pyproject.toml`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/pyproject.toml).
+This installs the dependencies declared in [`pyproject.toml`](possibilistic-portfolio-optimisation-py/pyproject.toml).
 
 ### Install with `venv`
 
 ```bash
-cd dev
+cd possibilistic-portfolio-optimisation-py
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install ipykernel matplotlib mpmath mypy numpy pandas pandas-stubs scipy
@@ -161,27 +161,27 @@ pip install ipykernel matplotlib mpmath mypy numpy pandas pandas-stubs scipy
 
 ### Important import-path note
 
-The modules in `dev/src` use direct imports such as `from markowitz import ...`, so the easiest ways to run the code are:
+The modules in `possibilistic-portfolio-optimisation-py/src` use direct imports such as `from markowitz import ...`, so the easiest ways to run the code are:
 
-1. run notebooks or scripts with the working directory set to `dev/src`, or
-2. add `dev/src` to `PYTHONPATH`
+1. run notebooks or scripts with the working directory set to `possibilistic-portfolio-optimisation-py/src`, or
+2. add `possibilistic-portfolio-optimisation-py/src` to `PYTHONPATH`
 
-### `dev/src/`
+### `possibilistic-portfolio-optimisation-py/src/`
 
-- [`alternative_investment_rules.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/alternative_investment_rules.py): benchmark and shrinkage-based portfolio rules
-- [`bayesian_averaging.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/bayesian_averaging.py): probabilistic dynamic Bayesian averaging engine
-- [`data_input.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/data_input.py): loaders and cleaning utilities for Kenneth French style data
-- [`distribution_evaluation_func.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/distribution_evaluation_func.py): predictive-distribution evaluation helpers
-- [`markowitz.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/markowitz.py): unconstrained Markowitz weight computation
-- [`necessity_calculation.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/necessity_calculation.py): Monte Carlo necessity approximation
-- [`necessity_deterministically.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/necessity_deterministically.py): deterministic / hybrid necessity approximation and weighting schemes
-- [`possibilistic_bayesian.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/possibilistic_bayesian.py): possibilistic dynamic model averaging engine
-- [`prior_selection.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/prior_selection.py): prior-sharing helper for Bayesian averaging
-- [`sharpe_ratio.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/sharpe_ratio.py): realized-return and utility metrics
-- [`simulated_datasets.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/simulated_datasets.py): simulated datasets and DGP helpers
-- [`analysis.ipynb`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/analysis.ipynb): main exploratory notebook for generating results and comparing methods
-- [`testing_data_input.ipynb`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/testing_data_input.ipynb): notebook used to test and inspect the data loading utilities
-- [`file.pkl`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/file.pkl): serialized experiment artifact; the codebase does not document its schema directly
+- [`alternative_investment_rules.py`](src/alternative_investment_rules.py): benchmark and shrinkage-based portfolio rules
+- [`bayesian_averaging.py`](src/bayesian_averaging.py): probabilistic dynamic Bayesian averaging engine
+- [`data_input.py`](src/data_input.py): loaders and cleaning utilities for Kenneth French style data
+- [`distribution_evaluation_func.py`](src/distribution_evaluation_func.py): predictive-distribution evaluation helpers
+- [`markowitz.py`](src/markowitz.py): unconstrained Markowitz weight computation
+- [`necessity_calculation.py`](src/necessity_calculation.py): Monte Carlo necessity approximation
+- [`necessity_deterministically.py`](src/necessity_deterministically.py): deterministic / hybrid necessity approximation and weighting schemes
+- [`possibilistic_bayesian.py`](src/possibilistic_bayesian.py): possibilistic dynamic model averaging engine
+- [`prior_selection.py`](src/prior_selection.py): prior-sharing helper for Bayesian averaging
+- [`sharpe_ratio.py`](src/sharpe_ratio.py): realized-return and utility metrics
+- [`simulated_datasets.py`](src/simulated_datasets.py): simulated datasets and DGP helpers
+- [`analysis.ipynb`](src/analysis.ipynb): main exploratory notebook for generating results and comparing methods
+- [`testing_data_input.ipynb`](src/testing_data_input.ipynb): notebook used to test and inspect the data loading utilities
+- [`file.pkl`](src/file.pkl): serialized experiment artifact; the codebase does not document its schema directly
 
 ### `datasets/`
 
@@ -196,8 +196,8 @@ The Datasets have been sourced from Kenneth-French Fama factor models library, a
 
 If you are new to the repository, the best starting points are:
 
-1. [`data_input.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/data_input.py) to understand the data schema.
-2. [`analysis.ipynb`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/analysis.ipynb) to see how the modules are composed.
-3. [`bayesian_averaging.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/bayesian_averaging.py) for the probabilistic baseline.
-4. [`possibilistic_bayesian.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/possibilistic_bayesian.py) for the main novel contribution.
-5. [`sharpe_ratio.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/sharpe_ratio.py) and [`distribution_evaluation_func.py`](/Users/jaini/possibilistic-portfolio-optimisation-py/dev/src/distribution_evaluation_func.py) for evaluation.
+1. [`data_input.py`](src/data_input.py) to understand the data schema.
+2. [`analysis.ipynb`](src/analysis.ipynb) to see how the modules are composed.
+3. [`bayesian_averaging.py`](src/bayesian_averaging.py) for the probabilistic baseline.
+4. [`possibilistic_bayesian.py`](src/possibilistic_bayesian.py) for the main novel contribution.
+5. [`sharpe_ratio.py`](src/sharpe_ratio.py) and [`distribution_evaluation_func.py`](src/distribution_evaluation_func.py) for evaluation.
