@@ -19,7 +19,7 @@ build/
 
 #working files
 src/testing_data_input.ipynb
-src/necessity_calculation.py
+src/necessity_montecarlo.py
 
 # mac
 .DS_Store

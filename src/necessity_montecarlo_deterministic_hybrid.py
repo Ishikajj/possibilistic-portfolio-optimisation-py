@@ -461,10 +461,11 @@ def deterministic_mask_weighting(
 
     validity_mask = (necessities > 0.0).astype(float)
     adjusted = validity_mask * possibilities
-    max_adjusted = adjusted.max(initial=0.0)
-    if max_adjusted <= 0.0:
-        return np.ones_like(adjusted)
-    return adjusted / max_adjusted
+
+    if sum(adjusted) <= 0:
+        return possibilities
+
+    return adjusted
 
 
 def power_weighting(
@@ -490,10 +491,10 @@ def power_weighting(
         raise ValueError("epsilon must be nonnegative.")
 
     adjusted = possibilities * np.power(np.maximum(necessities, 0.0) + epsilon, gamma)
-    max_adjusted = adjusted.max(initial=0.0)
-    if max_adjusted <= 0.0:
-        return np.ones_like(adjusted)
-    return adjusted / max_adjusted
+    if sum(adjusted) <= 0.0:
+        return possibilities
+
+    return adjusted
 
 
 def exponential_penalty_weighting(
@@ -516,10 +517,11 @@ def exponential_penalty_weighting(
         raise ValueError("eta must be nonnegative.")
 
     adjusted = possibilities * np.exp(-eta * (1.0 - np.maximum(necessities, 0.0)))
-    max_adjusted = adjusted.max(initial=0.0)
-    if max_adjusted <= 0.0:
-        return np.ones_like(adjusted)
-    return adjusted / max_adjusted
+
+    if sum(adjusted) <= 0:
+        return possibilities
+
+    return adjusted
 
 
 def necessity_weighted_possibilities_deterministic(

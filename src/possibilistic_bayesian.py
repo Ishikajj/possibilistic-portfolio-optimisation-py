@@ -19,6 +19,12 @@ from numpy.linalg import slogdet
 from prior_selection import sharing_prior_update
 from scipy.special import multigammaln
 from data_input import load_excess_returns_from_kenneth_french_path, prepare_returns
+from necessity_montecarlo_deterministic_hybrid import (
+    necessity_scores_deterministic,
+    deterministic_mask_weighting,
+    power_weighting,
+    exponential_penalty_weighting,
+)
 
 # TODO: main problem is the T^2n^3 complexity of the algorithm, where t is the time steps and n is assets
 # the n^3 remains fixed as the number of assets = 11
@@ -407,8 +413,12 @@ def run_core(
     R = R_df.values.astype(float)
     T, n = R.shape
 
-    mu_hat_arr = np.full((T, n), np.nan)
-    sigma_hat_arr = np.full((T, n, n), np.nan)
+    mu_hat_arr_masked = np.full((T, n), np.nan)
+    sigma_hat_arr_masked = np.full((T, n, n), np.nan)
+    mu_hat_arr_power = np.full((T, n), np.nan)
+    sigma_hat_arr_power = np.full((T, n, n), np.nan)
+    mu_hat_arr_exponential = np.full((T, n), np.nan)
+    sigma_hat_arr_exponential = np.full((T, n, n), np.nan)
 
     mus: list[np.ndarray] = []
     kappas: list[float] = []
@@ -439,10 +449,53 @@ def run_core(
         assert len(possibilities) == n_models
 
         R_t = R[t]
+
+        necessities = necessity_scores_deterministic(
+            y_next=R_t,
+            mus=mus,
+            kappas=kappas,
+            Lambdas=Lambdas,
+            nus=nus,
+            mc_samples=150,
+            top_k=10,
+            random_state=123,
+        )
         possibilities = _update_possibilities(
             R_t, mus, kappas, Lambdas, nus, possibilities
         )
         _update_all_models(R_t, mus, kappas, Lambdas, nus)
+
+        masked_weights = deterministic_mask_weighting(
+            necessities=necessities, possibilities=possibilities
+        )
+        power_weights = power_weighting(
+            necessities=necessities, possibilities=possibilities
+        )
+
+        exponential_weights = exponential_penalty_weighting(
+            necessities=necessities, possibilities=possibilities
+        )
+
+        mu_hat_masked, Sigma_hat_masked = _aggregate_possibilistic_niw(
+            mus, kappas, Lambdas, nus, masked_weights, n
+        )
+
+        mu_hat_power, sigma_hat_power = _aggregate_possibilistic_niw(
+            mus, kappas, Lambdas, nus, power_weights, n
+        )
+
+        mu_hat_exponential, sigma_hat_exponential = _aggregate_possibilistic_niw(
+            mus, kappas, Lambdas, nus, exponential_weights, n
+        )
+
+        mu_hat_arr_masked[t] = mu_hat_masked
+        sigma_hat_arr_masked[t] = Sigma_hat_masked
+
+        mu_hat_arr_power[t] = mu_hat_power
+        sigma_hat_arr_power[t] = sigma_hat_power
+
+        mu_hat_arr_exponential[t] = mu_hat_exponential
+        sigma_hat_arr_exponential[t] = sigma_hat_exponential
 
         mus, kappas, Lambdas, nus, possibilities = _prune_models(
             mus,
@@ -455,19 +508,17 @@ def run_core(
             keep_newest=keep_newest,
         )
 
-        mu_hat, Sigma_hat = _aggregate_possibilistic_niw(
-            mus, kappas, Lambdas, nus, possibilities, n
-        )
-        mu_hat_arr[t] = mu_hat
-        sigma_hat_arr[t] = Sigma_hat
-
         sum_R += R_t
         sum_R2 += R_t**2
 
-    return {
-        "mu_hat": mu_hat_arr,
-        "sigma_hat": sigma_hat_arr,
+    masked_predictive = {"mu_hat": mu_hat_arr_masked, "sigma_hat": sigma_hat_arr_masked}
+    power_predictive = {"mu_hat": mu_hat_arr_power, "sigma_hat": sigma_hat_arr_power}
+    exponential_predictive = {
+        "mu_hat": mu_hat_arr_exponential,
+        "sigma_hat": sigma_hat_arr_exponential,
     }
+
+    return masked_predictive, power_predictive, exponential_predictive
 
 
 def main():
