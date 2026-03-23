@@ -3,6 +3,7 @@ import pandas as pd
 from markowitz import markowitz_unconstrained
 from typing import Optional
 
+"""only 3 functions here: 1/n, market weights and minimum variance strategy here returns only the weights invested. rest returns the predictives as well as the weights invested."""
 
 # all functions below already return weight dataframes.
 # this means we can directly implement portfolio returns > all dem thangs.
@@ -86,18 +87,19 @@ def historical_expectations_weights(
         mu_sigma_dict, returns_df, burn_in, periods_until_investment
     )
 
-    return investment_weights
+    return mu_sigma_dict, investment_weights
 
 
+# returns the mu hat, sigma hat as well as the investment weights
 def rolling_window_weights(
-    returns_df: pd.DataFrame, window: int, burn: int, periods_until_investment: int
-) -> pd.DataFrame:
+    returns_df: pd.DataFrame, window: int, burn_in: int, periods_until_investment: int
+):
 
     T, n = returns_df.shape
     mu_hat = np.full((T, n), np.nan)
     sigma_hat = np.full((T, n, n), np.nan)
 
-    start = max(window, burn + periods_until_investment)
+    start = max(window, burn_in + periods_until_investment)
 
     for t in range(start, T):
         ret_window = returns_df.iloc[t - window : t]
@@ -106,10 +108,10 @@ def rolling_window_weights(
 
     mu_sigma_dict = {"mu_hat": mu_hat, "sigma_hat": sigma_hat}
     investment_weights = markowitz_unconstrained(
-        mu_sigma_dict, returns_df, burn, periods_until_investment
+        mu_sigma_dict, returns_df, burn_in, periods_until_investment
     )
 
-    return investment_weights
+    return mu_sigma_dict, investment_weights
 
 
 def equal_weight_strategy(
@@ -290,7 +292,7 @@ def jorion_bayes_stein_strategy(
     mu_sigma_dict = {"mu_hat": est["mu_star"], "sigma_hat": est["sigma_star"]}
 
     # Use existing pipeline to turn (mu*, Sigma*) into weights
-    return markowitz_unconstrained(
+    return mu_sigma_dict, markowitz_unconstrained(
         mu_sigma_dict=mu_sigma_dict,
         returns_df=returns_df,
         burn_in=burn_in,
@@ -391,7 +393,7 @@ def kan_zhou_three_fund_strategy(
     burn_in: int = 0,
     periods_until_investment: int = 0,
     theta: float = 1.0,
-) -> pd.DataFrame:
+):
     """Kan and Zhou (2007) three-fund rule.
 
     Implements Section 6.7 (as shown in your screenshot):
@@ -422,7 +424,7 @@ def kan_zhou_three_fund_strategy(
 
     mu_sigma_dict = {"mu_hat": mu_tilde, "sigma_hat": sigma_hat}
 
-    return markowitz_unconstrained(
+    return mu_sigma_dict, markowitz_unconstrained(
         mu_sigma_dict=mu_sigma_dict,
         returns_df=returns_df,
         burn_in=burn_in,

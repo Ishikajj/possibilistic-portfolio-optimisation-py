@@ -2,26 +2,10 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.linalg import LinAlgError, slogdet
-from scipy.optimize import minimize
+from scipy.optimize import dual_annealing, minimize
 from scipy.stats import invwishart
 
-
-# makes sense
-def _log_normal_likelihood(y: np.ndarray, mu: np.ndarray, Sigma: np.ndarray) -> float:
-    """Log multivariate normal likelihood of y given (mu, Sigma)."""
-    n = len(y)
-    Sigma = 0.5 * (Sigma + Sigma.T)
-    sign, logdet = slogdet(Sigma)
-    if sign <= 0:
-        return -np.inf
-
-    diff = y - mu
-    try:
-        quad = float(diff.T @ np.linalg.solve(Sigma, diff))
-    except LinAlgError:
-        return -np.inf
-
-    return -0.5 * (n * np.log(2.0 * np.pi) + logdet + quad)
+"""too slow."""
 
 
 # correct
@@ -55,44 +39,6 @@ def _log_possibilistic_niw_kernel(
         return -np.inf
 
     return -0.5 * nu * logdet - 0.5 * trace_term - 0.5 * kappa * quad_term
-
-
-# makes sense
-def _sample_probabilistic_niw(
-    mu0: np.ndarray,
-    kappa: float,
-    Lambda: np.ndarray,
-    nu: float,
-    n_samples: int,
-    rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Sample (mu, Sigma) from the probabilistic NIW analogue.
-
-    These samples are used only to generate strong initial points for local
-    optimization. The final necessity score is still computed from deterministic
-    local optimization of the corrected supremum objective.
-    """
-    n = len(mu0)
-    if n_samples <= 0:
-        raise ValueError("n_samples must be strictly positive.")
-    if kappa <= 0.0:
-        raise ValueError("kappa must be strictly positive.")
-    if nu <= n - 1:
-        raise ValueError(
-            f"nu must satisfy nu > n - 1 for inverse-Wishart sampling; got nu={nu}, n={n}."
-        )
-
-    # invwishart has the same mode in probability and possibility. when we draw from sample, things roughly match. its just that one has a normalisation issue.
-    Sigmas = invwishart.rvs(df=nu, scale=Lambda, size=n_samples, random_state=rng)
-    if n_samples == 1:
-        Sigmas = Sigmas[np.newaxis, :, :]
-
-    mus = np.empty((n_samples, n), dtype=float)
-    for s in range(n_samples):
-        Sigma_s = 0.5 * (Sigmas[s] + Sigmas[s].T)
-        mus[s] = rng.multivariate_normal(mean=mu0, cov=Sigma_s / kappa)
-
-    return mus, Sigmas
 
 
 # makes sense
@@ -143,6 +89,53 @@ def _unpack_theta(
         Sigma += ridge * np.eye(n, dtype=float)
     Sigma = 0.5 * (Sigma + Sigma.T)
     return mu, Sigma
+
+
+def _theta_bounds(
+    y_next: np.ndarray,
+    mu0: np.ndarray,
+    Lambda: np.ndarray,
+    nu: float,
+    sigma_floor: float,
+    mu_radius: float = 8.0,
+    chol_offdiag_scale: float = 6.0,
+    logdiag_pad: float = 4.0,
+) -> list[tuple[float, float]]:
+    """Construct box bounds for dual annealing in packed-theta coordinates.
+
+    The search variable is theta = (mu, packed Cholesky parameters). Because
+    scipy's dual_annealing requires finite box constraints, we build pragmatic
+    bounds centered around the NIW structure.
+    """
+    y_next = np.asarray(y_next, dtype=float)
+    mu0 = np.asarray(mu0, dtype=float)
+    Lambda = np.asarray(Lambda, dtype=float)
+    n = len(mu0)
+
+    Sigma_mode = 0.5 * (Lambda + Lambda.T) / float(nu)
+    Sigma_mode += sigma_floor * np.eye(n, dtype=float)
+    chol_mode = np.linalg.cholesky(Sigma_mode)
+
+    center = 0.5 * (mu0 + y_next)
+    spread = np.sqrt(np.maximum(np.diag(Sigma_mode), sigma_floor))
+    mu_lower = center - mu_radius * spread
+    mu_upper = center + mu_radius * spread
+
+    bounds: list[tuple[float, float]] = []
+    for i in range(n):
+        bounds.append((float(mu_lower[i]), float(mu_upper[i])))
+
+    for i in range(n):
+        logdiag_mode = float(np.log(max(chol_mode[i, i], 1e-12)))
+        bounds.append((logdiag_mode - logdiag_pad, logdiag_mode + logdiag_pad))
+        if i > 0:
+            row_scale = chol_offdiag_scale * float(
+                max(chol_mode[i, i], np.sqrt(sigma_floor))
+            )
+            for _ in range(i):
+                bounds.append((-row_scale, row_scale))
+
+    return bounds
 
 
 # correct but this is not "normal"
@@ -247,24 +240,15 @@ def _deterministic_initial_thetas(
     return thetas
 
 
-def _hybrid_initial_thetas(
+def _annealing_start_theta(
     y_next: np.ndarray,
     mu0: np.ndarray,
     kappa: float,
     Lambda: np.ndarray,
     nu: float,
     sigma_floor: float,
-    mc_samples: int,
-    top_k: int,
-    rng: np.random.Generator,
-) -> list[np.ndarray]:
-    """Construct hybrid starting points: analytic seeds plus top Monte Carlo seeds.
-
-    We first generate deterministic analytic starts from the NIW structure. We
-    then sample from the probabilistic NIW analogue, score those samples with the
-    corrected deterministic bracket objective, and keep the top-k samples as
-    additional starts for local optimization.
-    """
+) -> np.ndarray:
+    """Use deterministic NIW structure to provide a reasonable annealing start."""
     starts = _deterministic_initial_thetas(
         y_next=y_next,
         mu0=mu0,
@@ -272,43 +256,8 @@ def _hybrid_initial_thetas(
         Lambda=Lambda,
         nu=nu,
         sigma_floor=sigma_floor,
-    )  # we get some fixed initial samples depending on the parameters of the model and the observation we will notice.
-
-    if mc_samples <= 0 or top_k <= 0:
-        return starts
-
-    sample_mus, sample_sigmas = (
-        _sample_probabilistic_niw(  # some random samples from the NIW
-            mu0=mu0,
-            kappa=kappa,
-            Lambda=Lambda,
-            nu=nu,
-            n_samples=mc_samples,
-            rng=rng,
-        )
     )
-
-    values = np.empty(mc_samples, dtype=float)
-    for s in range(mc_samples):
-        values[s] = _bracket_value(
-            mu=sample_mus[s],
-            Sigma=sample_sigmas[s],
-            y_next=y_next,
-            mu0=mu0,
-            kappa=kappa,
-            Lambda=Lambda,
-            nu=nu,
-        )
-
-    order = np.argsort(values)[::-1]
-    n_keep = min(top_k, mc_samples)
-    for s in order[:n_keep]:
-        Sigma_start = 0.5 * (sample_sigmas[s] + sample_sigmas[s].T)
-        Sigma_start += sigma_floor * np.eye(len(mu0), dtype=float)
-        chol = np.linalg.cholesky(Sigma_start)
-        starts.append(_pack_theta(sample_mus[s], chol))
-
-    return starts
+    return starts[0]
 
 
 # makes sense
@@ -324,15 +273,14 @@ def _raw_internal_validity_score_deterministic(
     top_k: int = 0,
     rng: np.random.Generator | None = None,
 ) -> float:
-    """
-    finds the necessity of a given prior model, and the observation
-    Hybrid local-optimization approximation of the corrected necessity score.
+    """Approximate the corrected necessity score with scipy dual annealing.
 
-    The target remains the corrected deterministic quantity
-        V_m = 1 - sup (1 - h_bar_m) f_bar_m.
+    The target is
+        V_m = 1 - sup_{mu, Sigma} (1 - h_bar_m) f_bar_m.
 
-    The hybrid part is only in the choice of optimizer starting points:
-    analytic NIW-based starts plus top Monte Carlo NIW samples.
+    We optimize directly over packed-theta coordinates using scipy's
+    dual_annealing under pragmatic finite bounds, then optionally polish with
+    L-BFGS-B starting from the annealing solution.
     """
     y_next = np.asarray(y_next, dtype=float)
     mu0 = np.asarray(mu0, dtype=float)
@@ -346,42 +294,53 @@ def _raw_internal_validity_score_deterministic(
         value = _bracket_value(mu, Sigma, y_next, mu0, kappa, Lambda, nu)
         return -value
 
-    # gets a few start values (of mu and sigma, given our lambda, mu0 , kappa) depending on the number of samples
-    best_value = 0.0
-    starts = _hybrid_initial_thetas(
+    bounds = _theta_bounds(
+        y_next=y_next,
+        mu0=mu0,
+        Lambda=Lambda,
+        nu=nu,
+        sigma_floor=sigma_floor,
+    )
+    x0 = _annealing_start_theta(
         y_next=y_next,
         mu0=mu0,
         kappa=kappa,
         Lambda=Lambda,
         nu=nu,
         sigma_floor=sigma_floor,
-        mc_samples=mc_samples,
-        top_k=top_k,
-        rng=rng,
     )
 
-    for theta0 in starts:
-        res = minimize(objective, theta0, method="L-BFGS-B")
+    anneal_res = dual_annealing(
+        objective,
+        bounds=bounds,
+        x0=x0,
+        seed=rng,
+        no_local_search=True,
+    )
 
-        candidate_thetas = [theta0]
+    candidate_thetas: list[np.ndarray] = []
+    if anneal_res.x is not None and np.all(np.isfinite(anneal_res.x)):
+        candidate_thetas.append(np.asarray(anneal_res.x, dtype=float))
+    candidate_thetas.append(x0)
 
-        # res function finds some local optimizers of (1 - h) f
-        if res.success and np.all(np.isfinite(res.x)):
-            candidate_thetas.append(res.x)
+    best_theta = min(candidate_thetas, key=objective)
+    local_res = minimize(objective, best_theta, method="L-BFGS-B", bounds=bounds)
+    if local_res.success and np.all(np.isfinite(local_res.x)):
+        candidate_thetas.append(np.asarray(local_res.x, dtype=float))
 
-        # for each of these candidates, calculate the bracket value, and update it. to note that the maximiser is not used, only the maximised value
-        for theta in candidate_thetas:
-            mu, Sigma = _unpack_theta(theta, n=n, ridge=sigma_floor)
-            value = _bracket_value(
-                mu,
-                Sigma,
-                y_next,
-                mu0,
-                kappa,
-                Lambda,
-                nu,
-            )
-            best_value = max(best_value, value)
+    best_value = 0.0
+    for theta in candidate_thetas:
+        mu, Sigma = _unpack_theta(theta, n=n, ridge=sigma_floor)
+        value = _bracket_value(
+            mu,
+            Sigma,
+            y_next,
+            mu0,
+            kappa,
+            Lambda,
+            nu,
+        )
+        best_value = max(best_value, value)
 
     raw_score = 1.0 - best_value
     return max(raw_score, 0.0)

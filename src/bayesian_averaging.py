@@ -5,6 +5,7 @@ from numpy.linalg import slogdet
 from prior_selection import sharing_prior_update
 from scipy.special import multigammaln
 from data_input import load_excess_returns_from_kenneth_french_path, prepare_returns
+from markowitz import markowitz_unconstrained
 
 # TODO: main problem is the T^2n^3 complexity of the algorithm, where t is the time steps and n is assets
 # the n^3 remains fixed as the number of assets = 11
@@ -260,7 +261,7 @@ def _prune_models(
     nus: list[float],
     probs: np.ndarray,
     prune_threshold: float = 1e-6,
-    max_models: int | None = 2000,
+    max_models: int | None = 500,
     keep_newest: bool = True,
 ) -> tuple[
     list[np.ndarray],
@@ -323,6 +324,7 @@ def _prune_models(
 def run_core(
     returns_df: pd.DataFrame,
     burn_in: int = 1000,
+    periods_until_investment=0,
     prune_threshold: float = 1e-6,
     max_models: int | None = 2000,
     keep_newest: bool = True,
@@ -391,12 +393,17 @@ def run_core(
 
         sum_R += R_t
         sum_R2 += R_t**2
+    mu_sigma_dict = {"mu_hat": mu_hat_arr, "sigma_hat": sigma_hat_arr}
+
+    weights = markowitz_unconstrained(
+        mu_sigma_dict=mu_sigma_dict,
+        returns_df=returns_df,
+        burn_in=burn_in,
+        periods_until_investment=periods_until_investment,
+    )
 
     # VERY IMPORTANT: the returned mu_hat_arr and sigma_hat_arr have info upto time t, meaning they are predicting t+1.
-    return {
-        "mu_hat": mu_hat_arr,
-        "sigma_hat": sigma_hat_arr,
-    }
+    return mu_sigma_dict, weights
 
 
 def main():

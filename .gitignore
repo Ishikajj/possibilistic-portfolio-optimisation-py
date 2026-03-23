@@ -19,7 +19,8 @@ build/
 
 #working files
 src/testing_data_input.ipynb
-src/necessity_montecarlo.py
+
+src/testing_possibilistic_bayesian.ipynb
 
 # mac
 .DS_Store

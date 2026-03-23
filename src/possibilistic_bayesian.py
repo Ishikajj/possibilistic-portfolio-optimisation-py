@@ -19,12 +19,14 @@ from numpy.linalg import slogdet
 from prior_selection import sharing_prior_update
 from scipy.special import multigammaln
 from data_input import load_excess_returns_from_kenneth_french_path, prepare_returns
-from necessity_montecarlo_deterministic_hybrid import (
-    necessity_scores_deterministic,
+from annealing import (
     deterministic_mask_weighting,
     power_weighting,
     exponential_penalty_weighting,
 )
+from faster_necessity import necessity_scores_fast
+from annealing import necessity_scores_deterministic
+from markowitz import markowitz_unconstrained
 
 # TODO: main problem is the T^2n^3 complexity of the algorithm, where t is the time steps and n is assets
 # the n^3 remains fixed as the number of assets = 11
@@ -275,7 +277,7 @@ def _prune_models(
     nus: list[float],
     possibilities: np.ndarray,
     prune_threshold: float = 1e-6,
-    max_models: int | None = 200,
+    max_models: int | None = 500,
     keep_newest: bool = True,
 ) -> tuple[
     list[np.ndarray],
@@ -396,10 +398,13 @@ def _aggregate_possibilistic_niw(
 def run_core(
     returns_df: pd.DataFrame,
     burn_in: int = 1000,
+    periods_until_investment=0,
     prune_threshold: float = 1e-6,
     max_models: int | None = 200,
     keep_newest: bool = True,
-) -> dict[str, np.ndarray]:
+    gamma=1.0,
+    eta=1.0,
+):
     """Run the possibilistic model averaging algorithm.
 
     Implementation choices in this version:
@@ -408,6 +413,8 @@ def run_core(
     - NIW parameters are updated exactly as in the probabilistic conjugate case
     - geometric aggregation uses equal weights across models
     - necessity-based reweighting is intentionally omitted for now
+
+    returns 3 dictionaries of the predcitives.
     """
     R_df = returns_df.copy()
     R = R_df.values.astype(float)
@@ -435,6 +442,8 @@ def run_core(
         sum_R = R_burn.sum(axis=0)
         sum_R2 = (R_burn * R_burn).sum(axis=0)
 
+    print("enterred loop")
+
     for t in range(burn_obs, T):
         if t % 100 == 0:
             print(f"Processing time step {t} / {T}...")
@@ -450,30 +459,34 @@ def run_core(
 
         R_t = R[t]
 
-        necessities = necessity_scores_deterministic(
+        necessities = necessity_scores_fast(
             y_next=R_t,
             mus=mus,
             kappas=kappas,
             Lambdas=Lambdas,
             nus=nus,
-            mc_samples=150,
-            top_k=10,
-            random_state=123,
+            random_state=t,  # vary per step for diversity
         )
+
         possibilities = _update_possibilities(
             R_t, mus, kappas, Lambdas, nus, possibilities
         )
         _update_all_models(R_t, mus, kappas, Lambdas, nus)
 
         masked_weights = deterministic_mask_weighting(
-            necessities=necessities, possibilities=possibilities
+            necessities=necessities,
+            possibilities=possibilities,
         )
         power_weights = power_weighting(
-            necessities=necessities, possibilities=possibilities
+            necessities=necessities,
+            possibilities=possibilities,
+            gamma=gamma,
         )
 
         exponential_weights = exponential_penalty_weighting(
-            necessities=necessities, possibilities=possibilities
+            necessities=necessities,
+            possibilities=possibilities,
+            eta=eta,
         )
 
         mu_hat_masked, Sigma_hat_masked = _aggregate_possibilistic_niw(
@@ -518,7 +531,35 @@ def run_core(
         "sigma_hat": sigma_hat_arr_exponential,
     }
 
-    return masked_predictive, power_predictive, exponential_predictive
+    weights_masked = markowitz_unconstrained(
+        mu_sigma_dict=masked_predictive,
+        returns_df=returns_df,
+        burn_in=burn_in,
+        periods_until_investment=periods_until_investment,
+    )
+
+    weights_power = markowitz_unconstrained(
+        mu_sigma_dict=power_predictive,
+        returns_df=returns_df,
+        burn_in=burn_in,
+        periods_until_investment=periods_until_investment,
+    )
+
+    weights_exponential = markowitz_unconstrained(
+        mu_sigma_dict=exponential_predictive,
+        returns_df=returns_df,
+        burn_in=burn_in,
+        periods_until_investment=periods_until_investment,
+    )
+
+    return (
+        masked_predictive,
+        weights_masked,
+        power_predictive,
+        weights_power,
+        exponential_predictive,
+        weights_exponential,
+    )
 
 
 def main():
