@@ -19,8 +19,9 @@ build/
 
 #working files
 src/testing_data_input.ipynb
-
-src/testing_possibilistic_bayesian.ipynb
+*.csv
+*.npy
+*.pkl
 
 # mac
 .DS_Store

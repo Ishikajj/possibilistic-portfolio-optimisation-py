@@ -24,6 +24,85 @@ import pandas as pd
 # -----------------
 
 
+def prepare_sim_returns(portfolios_df: pd.DataFrame, n_assets: int = 5) -> pd.DataFrame:
+    """Prepare a simulated portfolios DataFrame for strategy runners.
+
+    Sets the Date column as the index and keeps the first n_assets asset
+    columns, returning a date-indexed DataFrame of excess returns in decimals.
+    """
+    df = portfolios_df.copy()
+    if "Date" in df.columns:
+        df = df.set_index("Date")
+    asset_cols = [c for c in df.columns if c.startswith("Asset")][:n_assets]
+    return df[asset_cols].apply(pd.to_numeric, errors="coerce").dropna(how="any")
+
+
+def simulate_sudden_break(
+    T: int = 252 * 20,
+    start_date: str = "2000-01-03",
+    n_assets: int = 5,
+    seed: int = 42,
+    break_fraction: float = 0.5,
+    mu_pre: float = 0.08 / 252.0,
+    mu_post: float = -0.04 / 252.0,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Single permanent structural break in factor mean at break_fraction * T.
+
+    Pre-break: positive drift.  Post-break: negative drift.
+    The break is abrupt and permanent — models that span the break are actively
+    harmful, so strategies that quickly down-weight stale models should win.
+    """
+    rng = np.random.default_rng(seed)
+    dates = _make_trading_dates(start_date, T)
+    RF = _simulate_rf(rng, T)
+
+    break_t = int(T * break_fraction)
+    mu_t = np.where(np.arange(T) < break_t, mu_pre, mu_post)
+    sigma_g = 0.16 / np.sqrt(252.0)
+    g = rng.normal(loc=mu_t, scale=sigma_g, size=T)
+
+    excess, _ = _simulate_factor_model_excess_returns(rng, g, n_assets)
+    return _pack_simulation_frames(dates, excess, RF, g)
+
+
+def simulate_mean_reverting_factor(
+    T: int = 252 * 20,
+    start_date: str = "2000-01-03",
+    n_assets: int = 5,
+    seed: int = 42,
+    theta: float = 0.05,
+    mu_bar: float = 0.08 / 252.0,
+    sigma_mu: float = 0.002,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Factor mean follows a discrete-time OU process (fast mean reversion).
+
+    mu_{t+1} = mu_t + theta * (mu_bar - mu_t) + sigma_mu * eps_t
+
+    With theta=0.05, the half-life is ~14 trading days.  Short-window models
+    consistently out-predict long-window models because recent data is far more
+    informative about the current factor mean.  Tests whether model averaging
+    concentrates weight on fresh models.
+    """
+    rng = np.random.default_rng(seed)
+    dates = _make_trading_dates(start_date, T)
+    RF = _simulate_rf(rng, T)
+
+    mu_t = np.empty(T, dtype=float)
+    mu_t[0] = mu_bar
+    noise = rng.normal(0.0, sigma_mu, size=T - 1)
+    for t in range(T - 1):
+        mu_t[t + 1] = mu_t[t] + theta * (mu_bar - mu_t[t]) + noise[t]
+
+    # Keep total Var(g_t) ≈ sigma_bar^2 = (0.16/sqrt(252))^2
+    sigma_bar = 0.16 / np.sqrt(252.0)
+    steady_state_var_mu = sigma_mu**2 / (2.0 * theta - theta**2)
+    sigma_g = float(np.sqrt(max(sigma_bar**2 - steady_state_var_mu, 1e-8)))
+    g = rng.normal(loc=mu_t, scale=sigma_g, size=T)
+
+    excess, _ = _simulate_factor_model_excess_returns(rng, g, n_assets)
+    return _pack_simulation_frames(dates, excess, RF, g)
+
+
 def _make_trading_dates(start_date: str, T: int) -> pd.DatetimeIndex:
     return pd.bdate_range(start=start_date, periods=T)
 

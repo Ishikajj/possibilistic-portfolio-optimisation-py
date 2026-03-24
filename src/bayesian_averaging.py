@@ -328,7 +328,7 @@ def run_core(
     prune_threshold: float = 1e-6,
     max_models: int | None = 2000,
     keep_newest: bool = True,
-) -> dict[str, np.ndarray]:
+):
 
     # important to note that a dataframe with the time index is still retained, and can be appended to the end of our produced weight series if needed.
     R_df = returns_df.copy()
