@@ -562,6 +562,206 @@ def run_core(
     )
 
 
+def run_core_diagnostic(
+    returns_df: pd.DataFrame,
+    burn_in: int = 100,
+    n_steps: int = 300,
+    prune_threshold: float = 1e-6,
+    max_models: int | None = 200,
+    keep_newest: bool = True,
+    gamma: float = 1.0,
+    eta: float = 1.0,
+) -> pd.DataFrame:
+    """Run the algorithm for n_steps and record per-step diagnostics.
+
+    Tracks the quantities most likely to reveal why the algorithm is misbehaving:
+      - necessity distribution (mean, max, fraction == 0, newborn model score)
+      - possibility distribution (max, entropy, effective number of models)
+      - whether the masked weighting fell back to raw possibilities
+      - aggregate Sigma condition number (predicts Markowitz blow-up)
+      - model pool composition (n_models, mean nu, mean kappa)
+    """
+    import warnings
+
+    R_df = returns_df.copy()
+    R = R_df.values.astype(float)
+    T, n = R.shape
+
+    mus: list[np.ndarray] = []
+    kappas: list[float] = []
+    Lambdas: list[np.ndarray] = []
+    nus: list[float] = []
+    possibilities = np.array([], dtype=float)
+
+    sum_R = np.zeros(n)
+    sum_R2 = np.zeros(n)
+
+    burn_obs = min(int(burn_in), T // 2)
+    if burn_obs > 0:
+        R_burn = R[:burn_obs]
+        sum_R = R_burn.sum(axis=0)
+        sum_R2 = (R_burn * R_burn).sum(axis=0)
+
+    t_end = min(burn_obs + n_steps, T)
+    records = []
+
+    for t in range(burn_obs, t_end):
+        mu_bar, lam_bar = _new_model_prior(sum_R, sum_R2, t)
+        possibilities = _append_new_model(
+            mus, kappas, Lambdas, nus, possibilities, mu_bar, lam_bar, n
+        )
+        n_models = len(mus)
+        R_t = R[t]
+
+        necessities = necessity_scores_fast(
+            y_next=R_t,
+            mus=mus,
+            kappas=kappas,
+            Lambdas=Lambdas,
+            nus=nus,
+            random_state=t,
+        )
+
+        possibilities = _update_possibilities(R_t, mus, kappas, Lambdas, nus, possibilities)
+        _update_all_models(R_t, mus, kappas, Lambdas, nus)
+
+        masked_weights = deterministic_mask_weighting(necessities, possibilities)
+        power_weights  = power_weighting(necessities, possibilities, gamma=gamma)
+
+        # did masked weighting fall back? (all necessities == 0 → mask all → fallback)
+        frac_nec_zero = float(np.mean(necessities == 0.0))
+        masked_fallback = bool(np.all(necessities == 0.0))
+
+        # possibility distribution
+        poss_max = float(possibilities.max())
+        poss_entropy = float(
+            -np.sum(p * np.log(p + 1e-300) for p in possibilities / (possibilities.sum() + 1e-300))
+        )
+        eff_n_models = float(np.exp(poss_entropy))  # effective number of models
+
+        # aggregate Sigma condition number under masked weights
+        try:
+            mu_agg, Sigma_agg = _aggregate_possibilistic_niw(
+                mus, kappas, Lambdas, nus, masked_weights if not masked_fallback else possibilities, n
+            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                sigma_cond = float(np.linalg.cond(Sigma_agg))
+            mu_norm = float(np.linalg.norm(mu_agg))
+        except Exception:
+            sigma_cond = np.nan
+            mu_norm = np.nan
+
+        records.append({
+            "t":                    t,
+            "n_models":             n_models,
+            # necessity
+            "nec_mean":             float(necessities.mean()),
+            "nec_max":              float(necessities.max()),
+            "nec_min":              float(necessities.min()),
+            "frac_nec_zero":        frac_nec_zero,
+            "newborn_necessity":    float(necessities[-1]),   # newest model is last
+            # possibility
+            "poss_max":             poss_max,
+            "poss_entropy":         poss_entropy,
+            "eff_n_models":         eff_n_models,
+            # weighting
+            "masked_fallback":      masked_fallback,
+            # model pool
+            "nu_mean":              float(np.mean(nus)),
+            "nu_min":               float(np.min(nus)),
+            "kappa_mean":           float(np.mean(kappas)),
+            # aggregate quality
+            "sigma_cond":           sigma_cond,
+            "mu_norm":              mu_norm,
+        })
+
+        mus, kappas, Lambdas, nus, possibilities = _prune_models(
+            mus, kappas, Lambdas, nus, possibilities,
+            prune_threshold=prune_threshold,
+            max_models=max_models,
+            keep_newest=keep_newest,
+        )
+        sum_R += R_t
+        sum_R2 += R_t ** 2
+
+    return pd.DataFrame(records).set_index("t")
+
+
+def main_diagnostic():
+    import matplotlib.pyplot as plt
+
+    df = prepare_returns(
+        load_excess_returns_from_kenneth_french_path(start_date="2000-01-01")
+    )
+
+    print("Running diagnostic (300 steps after burn-in=100)...")
+    diag = run_core_diagnostic(df, burn_in=100, n_steps=300)
+
+    print("\n── Summary ──────────────────────────────────────────")
+    print(diag[[
+        "n_models", "nec_mean", "nec_max", "frac_nec_zero",
+        "newborn_necessity", "masked_fallback", "sigma_cond",
+    ]].describe().round(4).to_string())
+
+    print(f"\nMasked fallback triggered {diag['masked_fallback'].sum()} / {len(diag)} steps")
+    print(f"Necessity always 0: {(diag['nec_max'] == 0).sum()} / {len(diag)} steps")
+    print(f"Sigma condition number — mean: {diag['sigma_cond'].mean():.1f}, max: {diag['sigma_cond'].max():.1f}")
+
+    fig, axes = plt.subplots(3, 2, figsize=(14, 11))
+    fig.suptitle("Possibilistic Bayesian — Per-Step Diagnostics", fontsize=13)
+
+    ax = axes[0, 0]
+    ax.plot(diag.index, diag["nec_mean"], label="mean necessity")
+    ax.plot(diag.index, diag["nec_max"],  label="max necessity", linestyle="--")
+    ax.plot(diag.index, diag["newborn_necessity"], label="newborn model", linestyle=":")
+    ax.set_title("Necessity scores")
+    ax.set_ylabel("Necessity")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+
+    ax = axes[0, 1]
+    ax.plot(diag.index, diag["frac_nec_zero"] * 100)
+    ax.set_title("% Models with necessity = 0  (triggers masked fallback)")
+    ax.set_ylabel("% models")
+    ax.set_ylim(0, 105)
+    ax.grid(alpha=0.3)
+
+    ax = axes[1, 0]
+    ax.plot(diag.index, diag["n_models"], label="total models")
+    ax.plot(diag.index, diag["eff_n_models"], label="effective models (exp entropy)", linestyle="--")
+    ax.set_title("Model pool size")
+    ax.set_ylabel("Count")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+
+    ax = axes[1, 1]
+    ax.plot(diag.index, diag["poss_entropy"])
+    ax.set_title("Possibility entropy  (high = flat/uninformative, low = concentrated)")
+    ax.set_ylabel("Entropy")
+    ax.grid(alpha=0.3)
+
+    ax = axes[2, 0]
+    ax.semilogy(diag.index, diag["sigma_cond"].clip(lower=1))
+    ax.set_title("Aggregate Σ condition number  (> 1e6 → Markowitz blows up)")
+    ax.set_ylabel("Condition number (log scale)")
+    ax.grid(alpha=0.3)
+
+    ax = axes[2, 1]
+    ax.plot(diag.index, diag["nu_mean"], label="mean ν")
+    ax.plot(diag.index, diag["nu_min"],  label="min ν", linestyle="--")
+    ax.set_title("NIW degrees of freedom ν across models")
+    ax.set_ylabel("ν")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+
+    fig.tight_layout()
+    plt.savefig("diagnostic_plot.png", dpi=150)
+    plt.show()
+
+    return diag
+
+
 def main():
     df = prepare_returns(
         load_excess_returns_from_kenneth_french_path(start_date="2020-01-01")
@@ -572,4 +772,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main_diagnostic()
