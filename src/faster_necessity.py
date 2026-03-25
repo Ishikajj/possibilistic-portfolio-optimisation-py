@@ -118,6 +118,7 @@ import numpy as np
 from numpy.linalg import LinAlgError, slogdet
 from scipy.optimize import minimize_scalar
 from scipy.stats import invwishart
+from joblib import Parallel, delayed
 
 
 def _log_possibilistic_niw_kernel(
@@ -491,6 +492,38 @@ def _raw_score_fast(
     return max(0.0, float(raw_score))
 
 
+def _score_single_model(
+    m: int,
+    y_next: np.ndarray,
+    mus: list[np.ndarray],
+    kappas: list[float],
+    Lambdas: list[np.ndarray],
+    nus: list[float],
+    sigma_floor: float,
+    initial_iw_samples: int,
+    adaptive_rounds: int,
+    elite_count: int,
+    per_round_samples: int,
+    perturb_scale: float,
+    random_state: int | None,
+) -> float:
+    seed_m = None if random_state is None else int(random_state + m)
+    return _raw_score_fast(
+        y_next=y_next,
+        mu0=np.asarray(mus[m], dtype=float),
+        kappa=float(kappas[m]),
+        Lambda=np.asarray(Lambdas[m], dtype=float),
+        nu=float(nus[m]),
+        sigma_floor=float(sigma_floor),
+        initial_iw_samples=int(initial_iw_samples),
+        adaptive_rounds=int(adaptive_rounds),
+        elite_count=int(elite_count),
+        per_round_samples=int(per_round_samples),
+        perturb_scale=float(perturb_scale),
+        random_state=seed_m,
+    )
+
+
 def necessity_scores_fast(
     y_next: np.ndarray,
     mus: list[np.ndarray],
@@ -505,6 +538,7 @@ def necessity_scores_fast(
     per_round_samples: int = 96,
     perturb_scale: float = 0.20,
     random_state: int | None = None,
+    n_jobs: int = 8,
 ) -> np.ndarray:
     """Compute fast approximate necessity scores for all models.
 
@@ -533,21 +567,42 @@ def necessity_scores_fast(
     y_next = np.asarray(y_next, dtype=float)
     raw_scores = np.empty(n_models, dtype=float)
 
-    for m in range(n_models):
-        seed_m = None if random_state is None else int(random_state + m)
-        raw_scores[m] = _raw_score_fast(
+    if n_jobs == 1:
+        raw_scores = np.empty(n_models, dtype=float)
+        for m in range(n_models):
+            raw_scores[m] = _score_single_model(
+                m=m,
+                y_next=y_next,
+                mus=mus,
+                kappas=kappas,
+                Lambdas=Lambdas,
+                nus=nus,
+                sigma_floor=float(sigma_floor),
+                initial_iw_samples=int(initial_iw_samples),
+                adaptive_rounds=int(adaptive_rounds),
+                elite_count=int(elite_count),
+                per_round_samples=int(per_round_samples),
+                perturb_scale=float(perturb_scale),
+                random_state=random_state,
+            )
+        return raw_scores
+
+    raw_scores_list = Parallel(n_jobs=n_jobs, prefer="processes")(
+        delayed(_score_single_model)(
+            m=m,
             y_next=y_next,
-            mu0=np.asarray(mus[m], dtype=float),
-            kappa=float(kappas[m]),
-            Lambda=np.asarray(Lambdas[m], dtype=float),
-            nu=float(nus[m]),
+            mus=mus,
+            kappas=kappas,
+            Lambdas=Lambdas,
+            nus=nus,
             sigma_floor=float(sigma_floor),
             initial_iw_samples=int(initial_iw_samples),
             adaptive_rounds=int(adaptive_rounds),
             elite_count=int(elite_count),
             per_round_samples=int(per_round_samples),
             perturb_scale=float(perturb_scale),
-            random_state=seed_m,
+            random_state=random_state,
         )
-
-    return raw_scores
+        for m in range(n_models)
+    )
+    return np.asarray(raw_scores_list, dtype=float)
