@@ -421,7 +421,7 @@ def _merge_models(
     Lambdas: list[np.ndarray],
     nus: list[float],
     possibilities: np.ndarray,
-    merge_threshold: float = 0.25,
+    merge_threshold: float = 0.01,
     nu_bandwidth: int = 50,
     k_neighbours: int = 5,
 ) -> tuple[
@@ -444,10 +444,13 @@ def _merge_models(
     it, repeat until no qualifying pairs remain.
     """
     if len(mus) < 2:
-        return mus, kappas, Lambdas, nus, possibilities
+        return mus, kappas, Lambdas, nus, possibilities, np.nan
 
     n = len(mus[0])
     poss_arr = np.array(possibilities, dtype=float, copy=True)
+
+    h_sum = 0.0
+    w_sum = 0.0
 
     while True:
         n_models = len(mus)
@@ -456,9 +459,12 @@ def _merge_models(
 
         nu_arr = np.array(nus, dtype=float)
         order = np.argsort(nu_arr)
+        poss_norm = poss_arr / (poss_arr.sum() + 1e-300)
 
         best_dist = np.inf
         best_i = best_j = -1
+        h_sum = 0.0
+        w_sum = 0.0
 
         for rank in range(n_models):
             i = int(order[rank])
@@ -478,6 +484,10 @@ def _merge_models(
                 hdist = _gaussian_hellinger_distance(
                     mus[i], Sigma_i, mus[j], Sigma_j
                 )
+
+                w = poss_norm[i] * poss_norm[j]
+                h_sum += w * hdist
+                w_sum += w
 
                 if hdist < merge_threshold and hdist < best_dist:
                     best_dist = hdist
@@ -513,7 +523,8 @@ def _merge_models(
     else:
         poss_arr = np.ones(len(poss_arr), dtype=float)
 
-    return mus, kappas, Lambdas, nus, poss_arr
+    hellinger_avg = h_sum / w_sum if w_sum > 0 else np.nan
+    return mus, kappas, Lambdas, nus, poss_arr, hellinger_avg
 
 
 def _aggregate_possibilistic_niw(
@@ -608,7 +619,7 @@ def run_core(
     returns_df: pd.DataFrame,
     burn_in: int = 1000,
     periods_until_investment: int = 0,
-    merge_threshold: float = 0.15,
+    merge_threshold: float = 0.01,
     max_models: int = 100,
     keep_newest: bool = True,
     nu_bandwidth: int = 50,
@@ -674,33 +685,6 @@ def run_core(
         )
 
         n_models_raw = len(mus)
-        assert (
-            len(mus) == len(kappas) == len(Lambdas) == len(nus) == n_models_raw
-        )
-        assert len(possibilities) == n_models_raw
-
-        mus, kappas, Lambdas, nus, possibilities = _prune_models(
-            mus,
-            kappas,
-            Lambdas,
-            nus,
-            possibilities,
-            max_models=max_models,
-            keep_newest=keep_newest,
-        )
-
-        mus, kappas, Lambdas, nus, possibilities = _merge_models(
-            mus,
-            kappas,
-            Lambdas,
-            nus,
-            possibilities,
-            merge_threshold=merge_threshold,
-            nu_bandwidth=nu_bandwidth,
-            k_neighbours=k_neighbours,
-        )
-
-        n_models_post_merge = len(mus)
 
         R_t = R[t]
         necessities = necessity_scores_fast(
@@ -709,6 +693,7 @@ def run_core(
             kappas=kappas,
             Lambdas=Lambdas,
             nus=nus,
+            n_jobs=6,
             random_state=t,  # vary per step for diversity
         )
 
@@ -745,16 +730,45 @@ def run_core(
             sigma_hat_arr_exp[t] = Sigma_exp
         except Exception:
             pass
+
+        mus, kappas, Lambdas, nus, possibilities = _prune_models(
+            mus,
+            kappas,
+            Lambdas,
+            nus,
+            possibilities,
+            max_models=max_models,
+            keep_newest=keep_newest,
+        )
+
+        n_models_post_prune = len(mus)
+        hellinger_avg = np.nan
+
+        mus, kappas, Lambdas, nus, possibilities, hellinger_avg = _merge_models(
+            mus,
+            kappas,
+            Lambdas,
+            nus,
+            possibilities,
+            merge_threshold=merge_threshold,
+            nu_bandwidth=nu_bandwidth,
+            k_neighbours=k_neighbours,
+        )
+
+        n_models_post_merge = len(mus)
+
         records.append(
             {
                 "t": t,
                 "n_models_raw": n_models_raw,
+                "n_models_post_prune": n_models_post_prune,
                 "n_models_post_merge": n_models_post_merge,
                 "nec_mean": float(necessities.mean()),
                 "nec_max": float(necessities.max()),
                 "frac_nec_zero": float(np.mean(necessities == 0.0)),
                 "nu_mean": float(np.mean(nus)),
                 "nu_min": float(np.min(nus)),
+                "hellinger_avg": hellinger_avg,
             }
         )
         sum_R += R_t
@@ -771,16 +785,6 @@ def run_core(
         "sigma_hat": sigma_hat_arr_power,
     }
     exp_predictive = {"mu_hat": mu_hat_arr_exp, "sigma_hat": sigma_hat_arr_exp}
-
-    # --- minimal persistence: save diagnostic predictive arrays ---
-    np.save("diag_mu_hat_masked.npy", mu_hat_arr_masked)
-    np.save("diag_sigma_hat_masked.npy", sigma_hat_arr_masked)
-
-    np.save("diag_mu_hat_power.npy", mu_hat_arr_power)
-    np.save("diag_sigma_hat_power.npy", sigma_hat_arr_power)
-
-    np.save("diag_mu_hat_exp.npy", mu_hat_arr_exp)
-    np.save("diag_sigma_hat_exp.npy", sigma_hat_arr_exp)
 
     weights_masked = markowitz_unconstrained(
         masked_predictive,

@@ -76,7 +76,7 @@ def calculate_all_functions_perdatasets(
     periods_until_investment: int = 1,
     theta: float = 1.0,
     max_models: int = 100,
-    merge_threshold: float = 0.15,
+    merge_threshold: float = 0.01,
     nu_bandwidth: int = 50,
     k_neighbours: int = 5,
     gamma: float = 1.0,
@@ -201,7 +201,10 @@ def calculate_all_functions_perdatasets(
         periods_until_investment=periods_until_investment,
     )
     _save_algo_outputs(
-        folder, "rolling_window_long", weights=weights_roll, mu_sigma_dict=roll_ms
+        folder,
+        "rolling_window_long",
+        weights=weights_roll,
+        mu_sigma_dict=roll_ms,
     )
 
     # 5. Rolling window ────────────────────────────────────────
@@ -215,7 +218,10 @@ def calculate_all_functions_perdatasets(
         periods_until_investment=periods_until_investment,
     )
     _save_algo_outputs(
-        folder, "rolling_window_short", weights=weights_roll, mu_sigma_dict=roll_ms
+        folder,
+        "rolling_window_short",
+        weights=weights_roll,
+        mu_sigma_dict=roll_ms,
     )
 
     # 6. Jorion Bayes-Stein ──────────────────────────────────
@@ -421,12 +427,13 @@ def run_simulation_pipeline(
     periods_until_investment: int = 1,
     theta: float = 1.0,
     max_models: int = 100,
-    merge_threshold: float = 0.15,
+    merge_threshold: float = 0.01,
     nu_bandwidth: int = 50,
     k_neighbours: int = 5,
     gamma: float = 1.0,
     eta: float = 1.0,
-    rolling_window: int = 250,
+    rolling_window_long: int = 250,
+    rolling_window_short: int = 63,
 ) -> Path:
     """Run every portfolio algorithm on one simulated dataset and persist outputs.
 
@@ -493,7 +500,7 @@ def run_all_simulations(
     periods_until_investment: int = 1,
     theta: float = 1.0,
     max_models: int = 100,
-    merge_threshold: float = 0.15,
+    merge_threshold: float = 0.01,
     nu_bandwidth: int = 50,
     k_neighbours: int = 5,
     gamma: float = 1.0,
@@ -577,7 +584,7 @@ def main():
     ]
     risk_free_path = "../datasets/F-F_Research_Data_Factors_daily.csv"
 
-    start_date = "1980-01-01"
+    start_date = "2023-06-01"
 
     burn_in = 500
 
@@ -585,7 +592,7 @@ def main():
 
     theta = 1
 
-    max_models = 100
+    max_models = 80
 
     merge_threshold = 0.15
 
@@ -608,7 +615,7 @@ def main():
         burn_in=burn_in,
         periods_until_investment=periods_until_investment,
         theta=theta,
-        max_models=theta,
+        max_models=max_models,
         merge_threshold=merge_threshold,
         nu_bandwidth=nu_bandwidth,
         k_neighbours=k_neighbours,

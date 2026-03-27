@@ -1,138 +1,139 @@
-def run_core_diagnostic(
-    returns_df: pd.DataFrame,
-    burn_in: int = 100,
-    n_steps: int = 300,
-    max_models: int | None = 200,
-    keep_newest: bool = True,
-    gamma: float = 1.0,
-    eta: float = 1.0,
-) -> pd.DataFrame:
-    """Run the algorithm for n_steps and record per-step diagnostics.
+# def run_core_diagnostic(
+#     returns_df: pd.DataFrame,
+#     burn_in: int = 100,
+#     n_steps: int = 300,
+#     max_models: int | None = 200,
+#     keep_newest: bool = True,
+#     gamma: float = 1.0,
+#     eta: float = 1.0,
+# ) -> pd.DataFrame:
+#     """Run the algorithm for n_steps and record per-step diagnostics.
 
-    Tracks the quantities most likely to reveal why the algorithm is misbehaving:
-      - necessity distribution (mean, max, fraction == 0, newborn model score)
-      - possibility distribution (max, entropy, effective number of models)
-      - whether the masked weighting fell back to raw possibilities
-      - aggregate Sigma condition number (predicts Markowitz blow-up)
-      - model pool composition (n_models, mean nu, mean kappa)
-    """
-    import warnings
+#     Tracks the quantities most likely to reveal why the algorithm is misbehaving:
+#       - necessity distribution (mean, max, fraction == 0, newborn model score)
+#       - possibility distribution (max, entropy, effective number of models)
+#       - whether the masked weighting fell back to raw possibilities
+#       - aggregate Sigma condition number (predicts Markowitz blow-up)
+#       - model pool composition (n_models, mean nu, mean kappa)
+#     """
+#     import warnings
 
-    R_df = returns_df.copy()
-    R = R_df.values.astype(float)
-    T, n = R.shape
+#     R_df = returns_df.copy()
+#     R = R_df.values.astype(float)
+#     T, n = R.shape
 
-    mus: list[np.ndarray] = []
-    kappas: list[float] = []
-    Lambdas: list[np.ndarray] = []
-    nus: list[float] = []
-    possibilities = np.array([], dtype=float)
+#     mus: list[np.ndarray] = []
+#     kappas: list[float] = []
+#     Lambdas: list[np.ndarray] = []
+#     nus: list[float] = []
+#     possibilities = np.array([], dtype=float)
 
-    sum_R = np.zeros(n)
-    sum_R2 = np.zeros(n)
+#     sum_R = np.zeros(n)
+#     sum_R2 = np.zeros(n)
 
-    burn_obs = min(int(burn_in), T // 2)
-    if burn_obs > 0:
-        R_burn = R[:burn_obs]
-        sum_R = R_burn.sum(axis=0)
-        sum_R2 = (R_burn * R_burn).sum(axis=0)
+#     burn_obs = min(int(burn_in), T // 2)
+#     if burn_obs > 0:
+#         R_burn = R[:burn_obs]
+#         sum_R = R_burn.sum(axis=0)
+#         sum_R2 = (R_burn * R_burn).sum(axis=0)
 
-    t_end = min(burn_obs + n_steps, T)
-    records = []
+#     t_end = min(burn_obs + n_steps, T)
+#     records = []
 
-    for t in range(burn_obs, t_end):
-        print(f"step {t}")
-        mu_bar, lam_bar = _new_model_prior(sum_R, sum_R2, t)
-        possibilities = _append_new_model(
-            mus, kappas, Lambdas, nus, possibilities, mu_bar, lam_bar, n
-        )
-        n_models = len(mus)
-        R_t = R[t]
+#     for t in range(burn_obs, t_end):
+#         print(f"step {t}")
+#         mu_bar, lam_bar = _new_model_prior(sum_R, sum_R2, t)
+#         possibilities = _append_new_model(
+#             mus, kappas, Lambdas, nus, possibilities, mu_bar, lam_bar, n
+#         )
+#         n_models = len(mus)
+#         R_t = R[t]
 
-        necessities = necessity_scores_fast(
-            y_next=R_t,
-            mus=mus,
-            kappas=kappas,
-            Lambdas=Lambdas,
-            nus=nus,
-            random_state=t,
-        )
+#         necessities = necessity_scores_fast(
+#             y_next=R_t,
+#             mus=mus,
+#             kappas=kappas,
+#             Lambdas=Lambdas,
+#             nus=nus,
+#             random_state=t,
+#         )
 
-        possibilities = _update_possibilities(
-            R_t, mus, kappas, Lambdas, nus, possibilities
-        )
-        _update_all_models(R_t, mus, kappas, Lambdas, nus)
+#         possibilities = _update_possibilities(
+#             R_t, mus, kappas, Lambdas, nus, possibilities
+#         )
+#         _update_all_models(R_t, mus, kappas, Lambdas, nus)
 
-        masked_weights = deterministic_mask_weighting(necessities, possibilities)
-        power_weights = power_weighting(necessities, possibilities, gamma=gamma)
+#         masked_weights = deterministic_mask_weighting(necessities, possibilities)
+#         power_weights = power_weighting(necessities, possibilities, gamma=gamma)
 
-        # did masked weighting fall back? (all necessities == 0 → mask all → fallback)
-        frac_nec_zero = float(np.mean(necessities == 0.0))
-        masked_fallback = bool(np.all(necessities == 0.0))
+#         # did masked weighting fall back? (all necessities == 0 → mask all → fallback)
+#         frac_nec_zero = float(np.mean(necessities == 0.0))
+#         masked_fallback = bool(np.all(necessities == 0.0))
 
-        # possibility distribution
-        poss_max = float(possibilities.max())
-        poss_norm = possibilities / (possibilities.sum() + 1e-300)
-        poss_entropy = float(-np.sum(poss_norm * np.log(poss_norm + 1e-300)))
-        eff_n_models = float(np.exp(poss_entropy))  # effective number of models
+#         # possibility distribution
+#         poss_max = float(possibilities.max())
+#         poss_norm = possibilities / (possibilities.sum() + 1e-300)
+#         poss_entropy = float(-np.sum(poss_norm * np.log(poss_norm + 1e-300)))
+#         eff_n_models = float(np.exp(poss_entropy))  # effective number of models
 
-        # aggregate Sigma condition number under masked weights
-        try:
-            mu_agg, Sigma_agg = _aggregate_possibilistic_niw(
-                mus,
-                kappas,
-                Lambdas,
-                nus,
-                masked_weights if not masked_fallback else possibilities,
-                n,
-            )
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                sigma_cond = float(np.linalg.cond(Sigma_agg))
-            mu_norm = float(np.linalg.norm(mu_agg))
-        except Exception:
-            sigma_cond = np.nan
-            mu_norm = np.nan
+#         # aggregate Sigma condition number under masked weights
+#         try:
+#             mu_agg, Sigma_agg = _aggregate_possibilistic_niw(
+#                 mus,
+#                 kappas,
+#                 Lambdas,
+#                 nus,
+#                 masked_weights if not masked_fallback else possibilities,
+#                 n,
+#             )
+#             with warnings.catch_warnings():
+#                 warnings.simplefilter("ignore")
+#                 sigma_cond = float(np.linalg.cond(Sigma_agg))
+#             mu_norm = float(np.linalg.norm(mu_agg))
+#         except Exception:
+#             sigma_cond = np.nan
+#             mu_norm = np.nan
 
-        records.append(
-            {
-                "t": t,
-                "n_models": n_models,
-                # necessity
-                "nec_mean": float(necessities.mean()),
-                "nec_max": float(necessities.max()),
-                "nec_min": float(necessities.min()),
-                "frac_nec_zero": frac_nec_zero,
-                "newborn_necessity": float(necessities[-1]),  # newest model is last
-                # possibility
-                "poss_max": poss_max,
-                "poss_entropy": poss_entropy,
-                "eff_n_models": eff_n_models,
-                # weighting
-                "masked_fallback": masked_fallback,
-                # model pool
-                "nu_mean": float(np.mean(nus)),
-                "nu_min": float(np.min(nus)),
-                "kappa_mean": float(np.mean(kappas)),
-                # aggregate quality
-                "sigma_cond": sigma_cond,
-                "mu_norm": mu_norm,
-            }
-        )
+#         records.append(
+#             {
+#                 "t": t,
+#                 "n_models": n_models,
+#                 # necessity
+#                 "nec_mean": float(necessities.mean()),
+#                 "nec_max": float(necessities.max()),
+#                 "nec_min": float(necessities.min()),
+#                 "frac_nec_zero": frac_nec_zero,
+#                 "newborn_necessity": float(necessities[-1]),  # newest model is last
+#                 # possibility
+#                 "poss_max": poss_max,
+#                 "poss_entropy": poss_entropy,
+#                 "eff_n_models": eff_n_models,
+#                 # weighting
+#                 "masked_fallback": masked_fallback,
+#                 # model pool
+#                 "nu_mean": float(np.mean(nus)),
+#                 "nu_min": float(np.min(nus)),
+#                 "kappa_mean": float(np.mean(kappas)),
+#                 # aggregate quality
+#                 "sigma_cond": sigma_cond,
+#                 "mu_norm": mu_norm,
+#             }
+#         )
 
-        mus, kappas, Lambdas, nus, possibilities = _prune_models(
-            mus,
-            kappas,
-            Lambdas,
-            nus,
-            possibilities,
-            max_models=max_models,
-            keep_newest=keep_newest,
-        )
-        sum_R += R_t
-        sum_R2 += R_t**2
+#         mus, kappas, Lambdas, nus, possibilities = _prune_models(
+#             mus,
+#             kappas,
+#             Lambdas,
+#             nus,
+#             possibilities,
+#             max_models=max_models,
+#             keep_newest=keep_newest,
+#         )
+#         sum_R += R_t
+#         sum_R2 += R_t**2
 
-    return pd.DataFrame(records).set_index("t")
+#     return pd.DataFrame(records).set_index("t")
+import pandas as pd
 
 
 def run_core_diagnostic_merging(
@@ -245,9 +246,13 @@ def run_core_diagnostic_merging(
             random_state=t,
         )
 
-        masked_weights = deterministic_mask_weighting(necessities, possibilities)
+        masked_weights = deterministic_mask_weighting(
+            necessities, possibilities
+        )
         power_weights = power_weighting(necessities, possibilities, gamma=gamma)
-        exp_weights = exponential_penalty_weighting(necessities, possibilities, eta=eta)
+        exp_weights = exponential_penalty_weighting(
+            necessities, possibilities, eta=eta
+        )
 
         sigma_cond = np.nan
         mu_norm = np.nan
@@ -302,8 +307,14 @@ def run_core_diagnostic_merging(
 
     diag_df = pd.DataFrame(records).set_index("t")
 
-    masked_predictive = {"mu_hat": mu_hat_arr_masked, "sigma_hat": sigma_hat_arr_masked}
-    power_predictive = {"mu_hat": mu_hat_arr_power, "sigma_hat": sigma_hat_arr_power}
+    masked_predictive = {
+        "mu_hat": mu_hat_arr_masked,
+        "sigma_hat": sigma_hat_arr_masked,
+    }
+    power_predictive = {
+        "mu_hat": mu_hat_arr_power,
+        "sigma_hat": sigma_hat_arr_power,
+    }
     exp_predictive = {"mu_hat": mu_hat_arr_exp, "sigma_hat": sigma_hat_arr_exp}
 
     # --- minimal persistence: save diagnostic predictive arrays ---
@@ -317,10 +328,16 @@ def run_core_diagnostic_merging(
     np.save("diag_sigma_hat_exp.npy", sigma_hat_arr_exp)
 
     weights_masked = markowitz_unconstrained(
-        masked_predictive, returns_df, burn_in=burn_in, periods_until_investment=0
+        masked_predictive,
+        returns_df,
+        burn_in=burn_in,
+        periods_until_investment=0,
     )
     weights_power = markowitz_unconstrained(
-        power_predictive, returns_df, burn_in=burn_in, periods_until_investment=0
+        power_predictive,
+        returns_df,
+        burn_in=burn_in,
+        periods_until_investment=0,
     )
     weights_exp = markowitz_unconstrained(
         exp_predictive, returns_df, burn_in=burn_in, periods_until_investment=0
@@ -391,7 +408,9 @@ def main_diagnostic():
     bay_ms, weights_bay_df = bayesian_averaging.run_core(
         df, burn_in=BURN_IN, periods_until_investment=0
     )
-    mu_bay_df = pd.DataFrame(bay_ms["mu_hat"], index=df.index, columns=df.columns)
+    mu_bay_df = pd.DataFrame(
+        bay_ms["mu_hat"], index=df.index, columns=df.columns
+    )
 
     # ── Slice weights to evaluation window ───────────────────────────────────
     w_masked = weights_masked_df.iloc[burn_obs + 1 : t_end]
@@ -418,7 +437,8 @@ def main_diagnostic():
         for name, w in strategies.items()
     }
     pf_rets = {
-        name: pf_returns(returns_window, w, lag=1) for name, w in strategies.items()
+        name: pf_returns(returns_window, w, lag=1)
+        for name, w in strategies.items()
     }
 
     # ── Average log-likelihoods ───────────────────────────────
@@ -512,10 +532,21 @@ def main_diagnostic():
 
     ax = axes[1, 0]
     ax.plot(
-        diag.index, diag["n_models_raw"], label="post-birth", alpha=0.4, linestyle=":"
+        diag.index,
+        diag["n_models_raw"],
+        label="post-birth",
+        alpha=0.4,
+        linestyle=":",
     )
-    ax.plot(diag.index, diag["n_models_post_prune"], label="post-prune", linestyle="--")
-    ax.plot(diag.index, diag["n_models_post_merge"], label="post-merge", linewidth=2)
+    ax.plot(
+        diag.index,
+        diag["n_models_post_prune"],
+        label="post-prune",
+        linestyle="--",
+    )
+    ax.plot(
+        diag.index, diag["n_models_post_merge"], label="post-merge", linewidth=2
+    )
     ax.axhline(
         diag["n_models_post_merge"].median(),
         color="red",
@@ -530,7 +561,9 @@ def main_diagnostic():
 
     ax = axes[1, 1]
     ax.plot(diag.index, diag["poss_entropy"], label="entropy")
-    ax.plot(diag.index, diag["eff_n_models"], label="eff. models", linestyle="--")
+    ax.plot(
+        diag.index, diag["eff_n_models"], label="eff. models", linestyle="--"
+    )
     ax.set_title("Possibility entropy + effective models")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
@@ -559,7 +592,8 @@ def main_diagnostic():
     }
     fig2, axes2 = plt.subplots(1, 2, figsize=(14, 5))
     fig2.suptitle(
-        f"Weighting schemes vs Bayesian  (burn={BURN_IN}, steps={N_STEPS})", fontsize=12
+        f"Weighting schemes vs Bayesian  (burn={BURN_IN}, steps={N_STEPS})",
+        fontsize=12,
     )
 
     ax = axes2[0]
@@ -583,7 +617,11 @@ def main_diagnostic():
     ax = axes2[1]
     for name, roll in rolls.items():
         ax.plot(
-            roll.index, roll.values, label=name, color=colors_map[name], linewidth=1.1
+            roll.index,
+            roll.values,
+            label=name,
+            color=colors_map[name],
+            linewidth=1.1,
         )
     ax.axhline(0, color="black", linewidth=0.6, linestyle="--")
     ax.set_title(f"Rolling Sharpe (window={ROLL_WINDOW}d)")
