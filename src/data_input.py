@@ -22,7 +22,8 @@ import numpy as np
 
 # Paths (relative to this file)
 DATA_PATH = (
-    Path(__file__).resolve().parent / "../../datasets/12_Industry_Portfolios_Daily.csv"
+    Path(__file__).resolve().parent
+    / "../../datasets/10_Industry_Portfolios_Daily.csv"
 )
 
 RISK_FREE_RATE_PATH = (
@@ -90,21 +91,63 @@ def _read_csv_block_between_markers(
     return pd.read_csv(StringIO(csv_text))
 
 
-def load_kenneth_french_portfolios(path: Path | None = None) -> pd.DataFrame:
+def load_kenneth_french_portfolios(
+    path: Path | None = None,
+    start_marker: str = "Average Value Weighted Returns -- Daily",
+    end_marker: str | None = "Average Equal Weighted Returns -- Daily",
+) -> pd.DataFrame:
     """Load industry portfolios daily returns and return a DataFrame with a datetime Date column.
 
     Expected: first column is a date-like column (often unnamed) with YYYYMMDD.
     Returns are converted from percent to decimal.
+
+    Parameters
+    ----------
+    start_marker : str
+        Line in the file that precedes the desired data block.
+    end_marker : str or None
+        Line that terminates the block.  Pass ``None`` to read from
+        ``start_marker`` to EOF (used for the equal-weighted block, which
+        has no following section header).
     """
     p = path or DATA_PATH
 
-    # Ken French-style files may contain multiple tables; extract the value-weighted daily block if present.
+    # Ken French-style files may contain multiple tables; extract the requested block if present.
     try:
-        df = _read_csv_block_between_markers(
-            p,
-            start_marker="Average Value Weighted Returns -- Daily",
-            end_marker="Average Equal Weighted Returns -- Daily",
-        )
+        if end_marker is not None:
+            df = _read_csv_block_between_markers(
+                p,
+                start_marker=start_marker,
+                end_marker=end_marker,
+            )
+        else:
+            # Read from start_marker to EOF, stopping at copyright or next section header.
+            text = Path(p).read_text(encoding="utf-8", errors="ignore")
+            lines = text.splitlines()
+            start_idx = next(
+                (i for i, ln in enumerate(lines) if start_marker in ln), None
+            )
+            if start_idx is None:
+                raise ValueError(
+                    f"start_marker={start_marker!r} not found in {p}"
+                )
+            cleaned: list[str] = []
+            for ln in lines[start_idx + 1 :]:
+                s = ln.strip()
+                if not s:
+                    continue
+                if " -- " in s and not s[0].isdigit() and not s.startswith(","):
+                    break
+                if s.lower().startswith("copyright"):
+                    break
+                cleaned.append(ln)
+            if not cleaned:
+                raise ValueError(
+                    f"No data found after marker {start_marker!r} in {p}"
+                )
+            from io import StringIO as _StringIO
+
+            df = pd.read_csv(_StringIO("\n".join(cleaned)))
     except Exception:
         # Fallback: treat as a normal CSV
         df = pd.read_csv(p)
@@ -212,6 +255,8 @@ def load_excess_returns_from_kenneth_french_path(
     risk_free_path: Path | str = RISK_FREE_RATE_PATH,
     start_date: str | None = None,
     end_date: str | None = None,
+    start_marker: str = "Average Value Weighted Returns -- Daily",
+    end_marker: str | None = "Average Equal Weighted Returns -- Daily",
 ) -> pd.DataFrame:
     """
     Minimum callable wrapper to:
@@ -224,7 +269,9 @@ def load_excess_returns_from_kenneth_french_path(
     portfolios_path = Path(portfolios_path)
     risk_free_path = Path(risk_free_path)
 
-    portfolios_df = load_kenneth_french_portfolios(portfolios_path)
+    portfolios_df = load_kenneth_french_portfolios(
+        portfolios_path, start_marker=start_marker, end_marker=end_marker
+    )
     rf_df = load_risk_free_rate(risk_free_path)
 
     portfolios_df = slice_timeframe(portfolios_df, start_date, end_date)
@@ -236,7 +283,7 @@ def load_excess_returns_from_kenneth_french_path(
 
 
 def prepare_returns(
-    df: pd.DataFrame, drop_cols: tuple[str, ...] = ("Date", "Other", "RF")
+    df: pd.DataFrame, drop_cols: tuple[str, ...] = ("Date", "RF")
 ) -> pd.DataFrame:
     """Return numeric returns-only DataFrame."""
     out = df.copy()
@@ -251,7 +298,9 @@ if __name__ == "__main__":
     df_risk_free = load_risk_free_rate()
     print(df_risk_free.head())
     print(df_risk_free.shape)
-    df = load_excess_returns_from_kenneth_french_path(DATA_PATH, RISK_FREE_RATE_PATH)
+    df = load_excess_returns_from_kenneth_french_path(
+        DATA_PATH, RISK_FREE_RATE_PATH
+    )
     print(df.head())
     print(df.columns)
     print(df.dtypes)

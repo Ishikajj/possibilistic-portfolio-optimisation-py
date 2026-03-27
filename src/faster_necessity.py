@@ -223,7 +223,9 @@ def _sample_iw_sigmas(
             f"nu must satisfy nu > n - 1 for inverse-Wishart sampling; got nu={nu}, n={n}."
         )
 
-    Sigmas = invwishart.rvs(df=nu, scale=Lambda, size=n_samples, random_state=rng)
+    Sigmas = invwishart.rvs(
+        df=nu, scale=Lambda, size=n_samples, random_state=rng
+    )
     if n_samples == 1:
         Sigmas = Sigmas[np.newaxis, :, :]
 
@@ -247,7 +249,9 @@ def _pack_sigma_cholesky(Sigma: np.ndarray) -> np.ndarray:
     return np.concatenate(pieces)
 
 
-def _unpack_sigma_cholesky(theta: np.ndarray, n: int, sigma_floor: float) -> np.ndarray:
+def _unpack_sigma_cholesky(
+    theta: np.ndarray, n: int, sigma_floor: float
+) -> np.ndarray:
     """Unpack Cholesky coordinates back into an SPD covariance matrix."""
     theta = np.asarray(theta, dtype=float)
     L = np.zeros((n, n), dtype=float)
@@ -340,7 +344,9 @@ def _best_bracket_for_sigma_cache(
     C = float(cache["C"])
 
     ts = np.linspace(t_min, t_max, grid_size)
-    vals = np.array([_bracket_1d_cached(t, d2, C, kappa) for t in ts], dtype=float)
+    vals = np.array(
+        [_bracket_1d_cached(t, d2, C, kappa) for t in ts], dtype=float
+    )
     idx = int(np.argmax(vals))
     best_val = float(vals[idx])
 
@@ -538,7 +544,7 @@ def necessity_scores_fast(
     per_round_samples: int = 96,
     perturb_scale: float = 0.20,
     random_state: int | None = None,
-    n_jobs: int = 8,
+    n_jobs: int = 6,
 ) -> np.ndarray:
     """Compute fast approximate necessity scores for all models.
 
@@ -606,3 +612,97 @@ def necessity_scores_fast(
         for m in range(n_models)
     )
     return np.asarray(raw_scores_list, dtype=float)
+
+
+# ------------------- New weighting functions -------------------
+
+
+def deterministic_mask_weighting(
+    necessities: np.ndarray,
+    possibilities: np.ndarray,
+) -> np.ndarray:
+    """Apply the deterministic 1{V_m > 0} mask to existing possibilities.
+
+    This function does not compute necessity scores itself. It expects model-wise
+    necessity scores that have already been computed, then masks the supplied
+    possibilities and normalizes the result to have supremum one.
+    """
+    necessities = np.asarray(necessities, dtype=float)
+    possibilities = np.asarray(possibilities, dtype=float)
+
+    if len(necessities) != len(possibilities):
+        raise ValueError(
+            "necessities and possibilities must have the same length."
+        )
+
+    validity_mask = (necessities > 0.0).astype(float)
+    adjusted = validity_mask * possibilities
+
+    if sum(adjusted) <= 0:
+        return possibilities
+
+    return adjusted
+
+
+def power_weighting(
+    necessities: np.ndarray,
+    possibilities: np.ndarray,
+    gamma: float = 1.0,
+    epsilon: float = 0.0,
+) -> np.ndarray:
+    """Apply soft power weighting using precomputed necessity scores.
+
+    The adjusted possibilities are proportional to
+        possibilities_m * (necessities_m + epsilon) ** gamma
+    and are then normalized to have supremum one.
+    """
+    necessities = np.asarray(necessities, dtype=float)
+    possibilities = np.asarray(possibilities, dtype=float)
+
+    if len(necessities) != len(possibilities):
+        raise ValueError(
+            "necessities and possibilities must have the same length."
+        )
+    if gamma <= 0.0:
+        raise ValueError("gamma must be strictly positive.")
+    if epsilon < 0.0:
+        raise ValueError("epsilon must be nonnegative.")
+
+    adjusted = possibilities * np.power(
+        np.maximum(necessities, 0.0) + epsilon, gamma
+    )
+    if sum(adjusted) <= 0.0:
+        return possibilities
+
+    return adjusted
+
+
+def exponential_penalty_weighting(
+    necessities: np.ndarray,
+    possibilities: np.ndarray,
+    eta: float = 1.0,
+) -> np.ndarray:
+    """Apply exponential penalization using precomputed necessity scores.
+
+    The adjusted possibilities are proportional to
+        possibilities_m * exp(-eta * (1 - necessities_m))
+    and are then normalized to have supremum one.
+    """
+    necessities = np.asarray(necessities, dtype=float)
+    possibilities = np.asarray(possibilities, dtype=float)
+
+    if len(necessities) != len(possibilities):
+        raise ValueError(
+            "necessities and possibilities must have the same length."
+        )
+    if eta < 0.0:
+        raise ValueError("eta must be nonnegative.")
+
+    adjusted = possibilities * np.exp(
+        -eta * (1.0 - np.maximum(necessities, 0.0))
+    )
+
+    if sum(adjusted) <= 0:
+        return possibilities
+
+    return adjusted

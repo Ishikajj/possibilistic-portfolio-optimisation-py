@@ -71,7 +71,7 @@ def historical_expectations_weights(
     returns_df: pd.DataFrame,
     burn_in: int,
     periods_until_investment: int,
-) -> pd.DataFrame:
+) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
     """Compute historical means and covariances across time."""
     T, n = returns_df.shape
     mu_hat = np.full((T, n), np.nan)
@@ -92,8 +92,11 @@ def historical_expectations_weights(
 
 # returns the mu hat, sigma hat as well as the investment weights
 def rolling_window_weights(
-    returns_df: pd.DataFrame, window: int, burn_in: int, periods_until_investment: int
-):
+    returns_df: pd.DataFrame,
+    window: int,
+    burn_in: int,
+    periods_until_investment: int,
+) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
 
     T, n = returns_df.shape
     mu_hat = np.full((T, n), np.nan)
@@ -280,7 +283,7 @@ def jorion_bayes_stein_strategy(
     burn_in: int = 0,
     periods_until_investment: int = 0,
     theta: float = 1.0,
-) -> pd.DataFrame:
+) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
     """Create Jorion's Bayes-Stein weights with burn-in and last-row exclusion."""
     est = jorion_bayes_stein_estimates(
         returns_df=returns_df,
@@ -393,7 +396,7 @@ def kan_zhou_three_fund_strategy(
     burn_in: int = 0,
     periods_until_investment: int = 0,
     theta: float = 1.0,
-):
+) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
     """Kan and Zhou (2007) three-fund rule.
 
     Implements Section 6.7 (as shown in your screenshot):

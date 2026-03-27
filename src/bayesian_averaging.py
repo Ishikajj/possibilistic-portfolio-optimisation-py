@@ -170,7 +170,13 @@ def _update_probs(
     return p / p.sum()  # normalise to sum 1.
 
 
-def _log_marginal_likelihood(R_t, mu, kappa, Lambda, nu):
+def _log_marginal_likelihood(
+    R_t: np.ndarray,
+    mu: np.ndarray,
+    kappa: float,
+    Lambda: np.ndarray,
+    nu: float,
+) -> float:
     """Log NIW marginal likelihood log L(R_t | m, F_{t-1}).
 
     Uses `scipy.special.multigammaln(a, d)`, which returns `log Γ_d(a)` (the natural
@@ -221,7 +227,13 @@ def _update_all_models(
         )
 
 
-def _update_niw(R_t, mu, kappa, Lambda, nu):
+def _update_niw(
+    R_t: np.ndarray,
+    mu: np.ndarray,
+    kappa: float,
+    Lambda: np.ndarray,
+    nu: float,
+) -> tuple[np.ndarray, float, np.ndarray, float]:
     k1 = kappa + 1.0
     nu1 = nu + 1.0
     mu1 = (kappa * mu + R_t) / k1
@@ -250,7 +262,7 @@ def _ba_moments(
     return mu_hat, Sigma_hat
 
 
-def _sigma_m(Lambda, nu, n):
+def _sigma_m(Lambda: np.ndarray, nu: float, n: int) -> np.ndarray:
     return Lambda / (nu - n - 1.0)
 
 
@@ -324,11 +336,11 @@ def _prune_models(
 def run_core(
     returns_df: pd.DataFrame,
     burn_in: int = 1000,
-    periods_until_investment=0,
+    periods_until_investment: int = 0,
     prune_threshold: float = 1e-6,
     max_models: int | None = 2000,
     keep_newest: bool = True,
-):
+) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
 
     # important to note that a dataframe with the time index is still retained, and can be appended to the end of our produced weight series if needed.
     R_df = returns_df.copy()
@@ -406,7 +418,7 @@ def run_core(
     return mu_sigma_dict, weights
 
 
-def main():
+def main() -> None:
     df = prepare_returns(
         load_excess_returns_from_kenneth_french_path(start_date="2020-01-01")
     )

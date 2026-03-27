@@ -22,6 +22,9 @@ src/testing_data_input.ipynb
 *.csv
 *.npy
 *.pkl
+CLAUDE.md
+diagnostics_26_march
+
 
 # mac
 .DS_Store

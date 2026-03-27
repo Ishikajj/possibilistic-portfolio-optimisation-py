@@ -1,15 +1,10 @@
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
-from typing import Dict
 
 # note that the runtime for this is Tn^3, due to the matrix inversion
 # but, since n is constant and small, this is negligible.
-Array3D = (
-    np.ndarray
-)  # shape (T, n, n) #this is the shape of the covariance array across time
-Array2D = (
-    np.ndarray
-)  # shape (T, n) #this is the shape of the mean returns array across time
 
 
 def markowitz_step(
@@ -24,12 +19,12 @@ def markowitz_step(
 
 
 def compute_weights_array(
-    mu_hat: Array2D,
-    sigma_hat: Array3D,
+    mu_hat: np.ndarray,
+    sigma_hat: np.ndarray,
     burn_in: int,
     periods_until_investment: int,
     theta: float,
-) -> Array2D:
+) -> np.ndarray:
     """Compute weights array across time."""
     T, n = mu_hat.shape
     weights = np.full((T, n), np.nan)
@@ -44,7 +39,7 @@ def compute_weights_array(
 
 
 def markowitz_unconstrained(
-    mu_sigma_dict: Dict[str, Array2D | Array3D],
+    mu_sigma_dict: dict[str, np.ndarray],
     returns_df: pd.DataFrame,
     burn_in: int,
     periods_until_investment: int,
