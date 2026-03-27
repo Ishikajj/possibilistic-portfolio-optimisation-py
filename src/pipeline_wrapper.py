@@ -561,6 +561,7 @@ def run_all_simulations(
 
     return output_folders
 
+
 def main():
     portfolio_paths = [
         "10_Industry_Portfolios_Daily.csv",
@@ -617,4 +618,6 @@ def main():
         rolling_window_short=rolling_window_short,
     )
 
+
 if __name__ == "main":
+    main()
