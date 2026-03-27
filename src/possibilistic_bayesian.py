@@ -415,6 +415,27 @@ def _gaussian_hellinger_distance(
     return float(np.sqrt(hellinger_sq))
 
 
+def _gaussian_mahalanobis_distance(
+    mu1: np.ndarray,
+    Sigma1: np.ndarray,
+    mu2: np.ndarray,
+    Sigma2: np.ndarray,
+) -> float:
+    """Mahalanobis distance between two Gaussian means using pooled covariance.
+
+        d = sqrt((mu1 - mu2)^T * ((Sigma1 + Sigma2) / 2)^{-1} * (mu1 - mu2))
+    """
+    eps = 1e-10
+    n = Sigma1.shape[0]
+    Sigma_pool = 0.5 * (Sigma1 + Sigma1.T + Sigma2 + Sigma2.T) + eps * np.eye(n, dtype=float)
+    d = mu1 - mu2
+    try:
+        quad = float(d @ np.linalg.solve(Sigma_pool, d))
+    except np.linalg.LinAlgError:
+        return np.inf
+    return float(np.sqrt(max(quad, 0.0)))
+
+
 def _merge_models(
     mus: list[np.ndarray],
     kappas: list[float],
@@ -525,6 +546,99 @@ def _merge_models(
 
     hellinger_avg = h_sum / w_sum if w_sum > 0 else np.nan
     return mus, kappas, Lambdas, nus, poss_arr, hellinger_avg
+
+
+def _merge_models_mahalanobis(
+    mus: list[np.ndarray],
+    kappas: list[float],
+    Lambdas: list[np.ndarray],
+    nus: list[float],
+    possibilities: np.ndarray,
+    merge_threshold: float = 1.0,
+    nu_bandwidth: int = 50,
+    k_neighbours: int = 5,
+) -> tuple[
+    list[np.ndarray], list[float], list[np.ndarray], list[float], np.ndarray, float
+]:
+    """Merge redundant model pairs using Mahalanobis distance on Gaussian summaries.
+
+    Two models are candidates for merging only if:
+      1. |nu_i - nu_j| <= nu_bandwidth
+      2. Mahalanobis distance between N(mu_i, Lambda_i/nu_i) and N(mu_j, Lambda_j/nu_j) < merge_threshold
+
+    Also accumulates the possibility-weighted average Mahalanobis distance
+    across neighbour pairs in the final (no-merge) scan, returned as mahalanobis_avg.
+    """
+    if len(mus) < 2:
+        return mus, kappas, Lambdas, nus, possibilities, np.nan
+
+    n = len(mus[0])
+    poss_arr = np.array(possibilities, dtype=float, copy=True)
+
+    m_sum = 0.0
+    w_sum = 0.0
+
+    while True:
+        n_models = len(mus)
+        if n_models < 2:
+            break
+
+        nu_arr = np.array(nus, dtype=float)
+        order = np.argsort(nu_arr)
+        poss_norm = poss_arr / (poss_arr.sum() + 1e-300)
+
+        best_dist = np.inf
+        best_i = best_j = -1
+        m_sum = 0.0
+        w_sum = 0.0
+
+        for rank in range(n_models):
+            i = int(order[rank])
+            Sigma_i = Lambdas[i] / nu_arr[i]
+
+            for fwd in range(1, k_neighbours + 1):
+                if rank + fwd >= n_models:
+                    break
+                j = int(order[rank + fwd])
+
+                if abs(nu_arr[i] - nu_arr[j]) > nu_bandwidth:
+                    break
+
+                Sigma_j = Lambdas[j] / nu_arr[j]
+                mdist = _gaussian_mahalanobis_distance(mus[i], Sigma_i, mus[j], Sigma_j)
+
+                w = poss_norm[i] * poss_norm[j]
+                m_sum += w * mdist
+                w_sum += w
+
+                if mdist < merge_threshold and mdist < best_dist:
+                    best_dist = mdist
+                    best_i, best_j = i, j
+
+        if best_i < 0:
+            break
+
+        mu_m, kappa_m, Lambda_m, nu_m, poss_m = _merge_two_models(
+            mus[best_i], kappas[best_i], Lambdas[best_i], nus[best_i], float(poss_arr[best_i]),
+            mus[best_j], kappas[best_j], Lambdas[best_j], nus[best_j], float(poss_arr[best_j]),
+            n,
+        )
+
+        keep = [k for k in range(n_models) if k != best_i and k != best_j]
+        mus = [mus[k] for k in keep] + [mu_m]
+        kappas = [kappas[k] for k in keep] + [kappa_m]
+        Lambdas = [Lambdas[k] for k in keep] + [Lambda_m]
+        nus = [nus[k] for k in keep] + [nu_m]
+        poss_arr = np.concatenate([poss_arr[keep], [poss_m]])
+
+    max_poss = float(poss_arr.max(initial=0.0))
+    if max_poss > 0.0:
+        poss_arr = poss_arr / max_poss
+    else:
+        poss_arr = np.ones(len(poss_arr), dtype=float)
+
+    mahalanobis_avg = m_sum / w_sum if w_sum > 0 else np.nan
+    return mus, kappas, Lambdas, nus, poss_arr, mahalanobis_avg
 
 
 def _aggregate_possibilistic_niw(
@@ -742,9 +856,9 @@ def run_core(
         )
 
         n_models_post_prune = len(mus)
-        hellinger_avg = np.nan
+        mahalanobis_avg = np.nan
 
-        mus, kappas, Lambdas, nus, possibilities, hellinger_avg = _merge_models(
+        mus, kappas, Lambdas, nus, possibilities, mahalanobis_avg = _merge_models_mahalanobis(
             mus,
             kappas,
             Lambdas,
@@ -768,7 +882,7 @@ def run_core(
                 "frac_nec_zero": float(np.mean(necessities == 0.0)),
                 "nu_mean": float(np.mean(nus)),
                 "nu_min": float(np.min(nus)),
-                "hellinger_avg": hellinger_avg,
+                "mahalanobis_avg": mahalanobis_avg,
             }
         )
         sum_R += R_t

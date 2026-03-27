@@ -584,7 +584,7 @@ def main():
     ]
     risk_free_path = "../datasets/F-F_Research_Data_Factors_daily.csv"
 
-    start_date = "2023-06-01"
+    start_date = "1980-01-01"
 
     burn_in = 500
 
