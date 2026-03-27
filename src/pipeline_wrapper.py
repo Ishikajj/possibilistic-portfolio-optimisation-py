@@ -201,7 +201,7 @@ def calculate_all_functions_perdatasets(
         periods_until_investment=periods_until_investment,
     )
     _save_algo_outputs(
-        folder, "rolling_window", weights=weights_roll, mu_sigma_dict=roll_ms
+        folder, "rolling_window_long", weights=weights_roll, mu_sigma_dict=roll_ms
     )
 
     # 5. Rolling window ────────────────────────────────────────
@@ -210,19 +210,19 @@ def calculate_all_functions_perdatasets(
     )
     roll_ms, weights_roll = rolling_window_weights(
         returns_df,
-        window=rolling_window_long,
+        window=rolling_window_short,
         burn_in=burn_in,
         periods_until_investment=periods_until_investment,
     )
     _save_algo_outputs(
-        folder, "rolling_window", weights=weights_roll, mu_sigma_dict=roll_ms
+        folder, "rolling_window_short", weights=weights_roll, mu_sigma_dict=roll_ms
     )
 
     # 6. Jorion Bayes-Stein ──────────────────────────────────
     print(f"[{dataset_name}] Jorion Bayes-Stein...")
     jbs_ms, weights_jbs = jorion_bayes_stein_strategy(
         returns_df,
-        window=rolling_window,
+        window=rolling_window_long,
         burn_in=burn_in,
         periods_until_investment=periods_until_investment,
         theta=theta,
@@ -235,7 +235,7 @@ def calculate_all_functions_perdatasets(
     print(f"[{dataset_name}] Kan-Zhou three-fund...")
     kz_ms, weights_kz = kan_zhou_three_fund_strategy(
         returns_df,
-        window=rolling_window,
+        window=rolling_window_long,
         burn_in=burn_in,
         periods_until_investment=periods_until_investment,
         theta=theta,
@@ -564,18 +564,18 @@ def run_all_simulations(
 
 def main():
     portfolio_paths = [
-        "10_Industry_Portfolios_Daily.csv",
-        "6_Portfolios_size_btm.csv",
-        "10_Portfolios_Formed_on_booktomarket.csv",
-        "6_Portfolios_size_ltr.csv",
-        "10_Portfolios_Formed_on_ME_size.csv",
-        "6_Portfolios_size_momentum.csv",
-        "10_Portfolios_ltr.csv",
-        "6_Portfolios_size_str.csv",
-        "10_Portfolios_Prior_momentum.csv",
-        "10_Portfolios_Prior_str.csv",
+        "../datasets/10_Industry_Portfolios_Daily.csv",
+        "../datasets/6_Portfolios_size_btm.csv",
+        "../datasets/10_Portfolios_Formed_on_booktomarket.csv",
+        "../datasets/6_Portfolios_size_ltr.csv",
+        "../datasets/10_Portfolios_Formed_on_ME_size.csv",
+        "../datasets/6_Portfolios_size_momentum.csv",
+        "../datasets/10_Portfolios_ltr.csv",
+        "../datasets/6_Portfolios_size_str.csv",
+        "../datasets/10_Portfolios_Prior_momentum.csv",
+        "../datasets/10_Portfolios_Prior_str.csv",
     ]
-    risk_free_path = "F-F_Research_Data_Factors_daily.csv"
+    risk_free_path = "../datasets/F-F_Research_Data_Factors_daily.csv"
 
     start_date = "1980-01-01"
 
@@ -619,5 +619,5 @@ def main():
     )
 
 
-if __name__ == "main":
+if __name__ == "__main__":
     main()
