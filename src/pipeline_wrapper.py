@@ -84,6 +84,7 @@ def calculate_all_functions_perdatasets(
     rolling_window_long: int = 250,
     rolling_window_short: int = 63,
     output_dir: Path | str | None = None,
+    device: str = "cpu",
 ) -> Path:
     """Run every portfolio algorithm on one dataset and persist all outputs.
 
@@ -281,6 +282,7 @@ def calculate_all_functions_perdatasets(
         k_neighbours=k_neighbours,
         gamma=gamma,
         eta=eta,
+        device=device,
     )
     _save_algo_outputs(
         folder,
@@ -304,7 +306,7 @@ def calculate_all_functions_perdatasets(
 
 
 def call_all_datasets(
-    portfolios_paths: list[Path | str],
+    portfolios_paths: list[Path | str | tuple[Path | str, str | None]],
     risk_free_path: Path | str = RISK_FREE_RATE_PATH,
     start_date: str | None = "1963-01-01",
     end_date: str | None = None,
@@ -364,11 +366,18 @@ def call_all_datasets(
 
     for raw_path in portfolios_paths:
         p = Path(raw_path)
+    for entry in portfolios_paths:
+        if isinstance(entry, tuple):
+            raw_path, ew_end_override = entry
+        else
+            raw_path = entry
+            ew_end_override = None
+        p = Path(raw_path)
         stem = p.stem  # e.g. "12_Industry_Portfolios_Daily"
 
         for weighting, start_marker, end_marker in [
             ("value_weighted", _VW_START, _VW_END),
-            ("equal_weighted", _EW_START, None),
+            ("equal_weighted", _EW_START, ew_end_override),
         ]:
             dataset_name = f"{stem}_{weighting}"
             print(f"\n{'=' * 60}")
@@ -418,10 +427,9 @@ def call_all_datasets(
 # ── Simulated-data pipeline ───────────────────────────────────────────────────
 
 
-def run_simulation_pipeline(
-    sim_func: Callable[..., tuple[pd.DataFrame, pd.DataFrame]],
-    dataset_name: str,
-    sim_kwargs: dict | None = None,
+def call_all_simulated_datasets(
+    sim_data_dir: Path | str,
+    sim_files: list[tuple[str, str, str]],
     output_dir: Path | str | None = None,
     burn_in: int = 500,
     periods_until_investment: int = 1,
@@ -434,153 +442,140 @@ def run_simulation_pipeline(
     eta: float = 1.0,
     rolling_window_long: int = 250,
     rolling_window_short: int = 63,
-) -> Path:
-    """Run every portfolio algorithm on one simulated dataset and persist outputs.
+) -> list[Path]:
+    """Run the full algorithm suite on all saved simulated datasets.
 
-    Calls ``sim_func(**sim_kwargs)`` which must return ``(portfolios_df, rf_df)``
-    in the same schema as the simulation helpers in ``simulated_datasets.py``
-    (i.e. ``portfolios_df`` already contains excess returns — RF is NOT
-    subtracted again).  ``prepare_sim_returns`` is used to strip the Date
-    column and select the Asset columns.
+    Loads portfolio CSVs and their paired RF CSVs from ``sim_data_dir``
+    (written by ``generate_and_save_sim_datasets`` in table1_summary_stats.py).
+    Data is already excess returns in decimals — no marker parsing or RF
+    subtraction needed.  The RF CSV is copied into each output folder so
+    the evaluation pipeline can compute CEQ.
 
     Parameters
     ----------
-    sim_func : callable
-        One of the generators from ``simulated_datasets.py``:
-        ``simulate_rbpc_data``, ``simulate_rbpc_data_regime_shifts``,
-        ``simulate_sudden_break``, or ``simulate_mean_reverting_factor``.
-    dataset_name : str
-        Used as the output sub-folder name.
-    sim_kwargs : dict, optional
-        Keyword arguments forwarded to ``sim_func``.  Defaults to ``{}``.
-    output_dir : Path or str, optional
-        Root directory for output folders.  Defaults to current working dir.
-    burn_in, periods_until_investment, theta, max_models, merge_threshold,
-    nu_bandwidth, k_neighbours, gamma, eta, rolling_window :
-        Forwarded verbatim to ``calculate_all_functions_perdatasets``.
-
-    Returns
-    -------
-    folder : Path
-        Path to the created output folder.
+    sim_data_dir : Path or str
+        Directory containing the saved CSVs.
+    sim_files : list of (dataset_name, portfolio_filename, rf_filename)
+        One tuple per DGP.
     """
     from simulated_datasets import prepare_sim_returns
 
-    kwargs = sim_kwargs or {}
-    portfolios_df, _rf_df = sim_func(**kwargs)
-
-    # Simulated portfolios_df already contains excess returns; just clean columns.
-    n_assets = sum(1 for c in portfolios_df.columns if c.startswith("Asset"))
-    returns_df = prepare_sim_returns(portfolios_df, n_assets=n_assets)
-
-    return calculate_all_functions_perdatasets(
-        dataset=returns_df,
-        dataset_name=dataset_name,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
-        theta=theta,
-        max_models=max_models,
-        merge_threshold=merge_threshold,
-        nu_bandwidth=nu_bandwidth,
-        k_neighbours=k_neighbours,
-        gamma=gamma,
-        eta=eta,
-        rolling_window_long=rolling_window_long,
-        rolling_window_short=rolling_window_short,
-        output_dir=output_dir,
-    )
-
-
-def run_all_simulations(
-    output_dir: Path | str | None = None,
-    T: int = 252 * 20,
-    n_assets: int = 10,
-    seed: int = 0,
-    burn_in: int = 500,
-    periods_until_investment: int = 1,
-    theta: float = 1.0,
-    max_models: int = 100,
-    merge_threshold: float = 0.01,
-    nu_bandwidth: int = 50,
-    k_neighbours: int = 5,
-    gamma: float = 1.0,
-    eta: float = 1.0,
-    rolling_window: int = 250,
-) -> list[Path]:
-    """Run the full algorithm suite on all four simulation DGPs.
-
-    DGPs run:
-      1. ``iid``            — i.i.d. factor (DGP 1 from the paper)
-      2. ``regime_shifts``  — Markov regime changes in factor mean (DGP 2)
-      3. ``sudden_break``   — single permanent structural break at T/2
-      4. ``mean_reverting`` — OU factor mean (fast mean reversion)
-
-    Each DGP produces its own output folder named after the DGP.
-    All four share the same ``T``, ``n_assets``, and ``seed`` for
-    like-for-like comparison.
-
-    Returns
-    -------
-    output_folders : list of Path
-        One Path per DGP.
-    """
-    from simulated_datasets import (
-        simulate_rbpc_data,
-        simulate_rbpc_data_regime_shifts,
-        simulate_sudden_break,
-        simulate_mean_reverting_factor,
-    )
-
-    shared = dict(T=T, n_assets=n_assets, seed=seed)
-    algo_kwargs = dict(
-        output_dir=output_dir,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
-        theta=theta,
-        max_models=max_models,
-        merge_threshold=merge_threshold,
-        nu_bandwidth=nu_bandwidth,
-        k_neighbours=k_neighbours,
-        gamma=gamma,
-        eta=eta,
-        rolling_window=rolling_window,
-    )
-
-    simulations = [
-        ("iid", simulate_rbpc_data, shared),
-        ("regime_shifts", simulate_rbpc_data_regime_shifts, shared),
-        ("sudden_break", simulate_sudden_break, shared),
-        ("mean_reverting", simulate_mean_reverting_factor, shared),
-    ]
-
+    sim_data_dir = Path(sim_data_dir)
     output_folders: list[Path] = []
-    for dataset_name, sim_func, sim_kwargs in simulations:
-        print(f"\n{'=' * 60}")
-        print(f"Simulation: {dataset_name}")
-        print(f"{'=' * 60}")
-        folder = run_simulation_pipeline(
-            sim_func=sim_func,
-            dataset_name=dataset_name,
-            sim_kwargs=sim_kwargs,
-            **algo_kwargs,
-        )
-        output_folders.append(folder)
+
+    for dataset_name, port_file, rf_file in sim_files:
+        port_path = sim_data_dir / port_file
+        rf_path = sim_data_dir / rf_file
+
+        for p in (port_path, rf_path):
+            if not p.exists():
+                print(
+                    f"  [WARNING] {p} not found — skipping {dataset_name}. "
+                    "Run generate_and_save_sim_datasets() in table1_summary_stats.py first."
+                )
+                break
+        else:
+            print(f"\n{'=' * 60}")
+            print(f"Simulation : {dataset_name}")
+            print(f"{'=' * 60}")
+
+            portfolios_df = pd.read_csv(port_path, parse_dates=["Date"])
+            n_assets = sum(
+                1 for c in portfolios_df.columns if c.startswith("Asset")
+            )
+            returns_df = prepare_sim_returns(portfolios_df, n_assets=n_assets)
+
+            folder = calculate_all_functions_perdatasets(
+                dataset=returns_df,
+                dataset_name=dataset_name,
+                burn_in=burn_in,
+                periods_until_investment=periods_until_investment,
+                theta=theta,
+                max_models=max_models,
+                merge_threshold=merge_threshold,
+                nu_bandwidth=nu_bandwidth,
+                k_neighbours=k_neighbours,
+                gamma=gamma,
+                eta=eta,
+                rolling_window_long=rolling_window_long,
+                rolling_window_short=rolling_window_short,
+                output_dir=output_dir,
+            )
+
+            # Copy RF into output folder so evaluation pipeline can load it.
+            pd.read_csv(rf_path, parse_dates=["Date"]).to_csv(
+                folder / "rf.csv", index=False
+            )
+
+            output_folders.append(folder)
 
     return output_folders
 
 
+def main2():
+    SIM_DATA_DIR = Path("../datasets/simulated")
+    SIM_T = 6000
+    SIM_N = 5
+    SIM_SEED = 42
+
+    sim_files = [
+        (
+            "iid",
+            f"iid_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
+            f"rf_iid_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
+        ),
+        (
+            "reg",
+            f"reg_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
+            f"rf_reg_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
+        ),
+        (
+            "break",
+            f"break_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
+            f"rf_break_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
+        ),
+        (
+            "mr",
+            f"mr_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
+            f"rf_mr_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
+        ),
+        (
+            "cov_break",
+            f"cov_break_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
+            f"rf_cov_break_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
+        ),
+        (
+            "stoch_vol",
+            f"stoch_vol_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
+            f"rf_stoch_vol_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
+        ),
+    ]
+
+    return call_all_simulated_datasets(
+        sim_data_dir=SIM_DATA_DIR,
+        sim_files=sim_files,
+        burn_in=500,
+        periods_until_investment=500,
+        theta=1.0,
+        max_models=80,
+        merge_threshold=1.0,
+        nu_bandwidth=50,
+        k_neighbours=5,
+        gamma=1.0,
+        eta=1.0,
+        rolling_window_long=252,
+        rolling_window_short=63,
+    )
+
+
 def main():
     portfolio_paths = [
-        "../datasets/10_Industry_Portfolios_Daily.csv",
-        "../datasets/6_Portfolios_size_btm.csv",
-        "../datasets/10_Portfolios_Formed_on_booktomarket.csv",
-        "../datasets/6_Portfolios_size_ltr.csv",
-        "../datasets/10_Portfolios_Formed_on_ME_size.csv",
         "../datasets/6_Portfolios_size_momentum.csv",
         "../datasets/10_Portfolios_ltr.csv",
         "../datasets/6_Portfolios_size_str.csv",
         "../datasets/10_Portfolios_Prior_momentum.csv",
         "../datasets/10_Portfolios_Prior_str.csv",
+        ("../datasets/6_Portfolios_size_btm.csv", "Number of Firms in Portfolios")
     ]
     risk_free_path = "../datasets/F-F_Research_Data_Factors_daily.csv"
 
@@ -594,12 +589,11 @@ def main():
 
     max_models = 80
 
-    merge_threshold = 0.15
+    merge_threshold = 1.0
 
     nu_bandwidth = 50
 
     k_neighbours = 5
-
     gamma = 1.0
 
     eta = 1.0
@@ -627,4 +621,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main2()

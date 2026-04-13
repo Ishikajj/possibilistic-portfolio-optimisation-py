@@ -152,5 +152,24 @@ def certainty_equivalent(
     return float(ce)
 
 
-# neg log likelohood for assessmnet
-# mahalanobis for assessment.
+def average_turnover(
+    weights_df: pd.DataFrame,
+    scaling_factor: int | None = None,
+) -> float:
+    """Mean daily portfolio turnover.
+
+    Turnover at t = sum_i |w_{i,t} - w_{i,t-1}|.
+    Averaged over all periods with a valid previous weight.
+    Multiply by scaling_factor (e.g. 252) to annualise.
+    """
+    assert isinstance(weights_df, pd.DataFrame)
+
+    daily = weights_df.diff().abs().sum(axis=1).dropna()
+
+    if daily.empty:
+        return float("nan")
+
+    to = float(daily.mean())
+    if scaling_factor:
+        to *= scaling_factor
+    return to

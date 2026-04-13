@@ -40,6 +40,7 @@ from portfolio_evaluation_functions import (
     calculate_sharpe_ratio,
     rolling_sharpe_ratio,
     certainty_equivalent,
+    average_turnover,
 )
 from distribution_evalutation_func import (
     average_log_likelihood,
@@ -47,11 +48,12 @@ from distribution_evalutation_func import (
     multivariate_log_likelihood_series,
 )
 
-_ROLLING_WINDOW = 150
-_SCALING_FACTOR = 252
+_ROLLING_WINDOW = 252
+_SCALING_FACTOR = 1
 
 
 # ── 1. I/O helpers ────────────────────────────────────────────────────────────
+
 
 def load_returns(folder: Path | str) -> pd.DataFrame:
     """Load the prepared returns DataFrame saved by the pipeline.
@@ -115,6 +117,7 @@ def discover_strategies(folder: Path | str) -> list[str]:
 
 # ── 2. Metric computation ─────────────────────────────────────────────────────
 
+
 def compute_scalar_metrics(
     returns_df: pd.DataFrame,
     weights_df: pd.DataFrame,
@@ -157,10 +160,14 @@ def compute_scalar_metrics(
             returns_df, mu_sigma_dict
         )
         mah = mahalanobis_distance_series(returns_df, mu_sigma_dict).dropna()
-        results["avg_mahalanobis"] = float(mah.mean()) if not mah.empty else float("nan")
+        results["avg_mahalanobis"] = (
+            float(mah.mean()) if not mah.empty else float("nan")
+        )
     else:
         results["avg_log_likelihood"] = float("nan")
         results["avg_mahalanobis"] = float("nan")
+
+    results["avg_turnover"] = average_turnover(weights_df, scaling_factor=_SCALING_FACTOR)
 
     return results
 
@@ -185,7 +192,10 @@ def compute_series_metrics(
     results: dict = {}
 
     results["rolling_sharpe"] = rolling_sharpe_ratio(
-        returns_df, weights_df, window=rolling_window, scaling_factor=_SCALING_FACTOR
+        returns_df,
+        weights_df,
+        window=rolling_window,
+        scaling_factor=_SCALING_FACTOR,
     )
 
     if mu_sigma_dict is not None:
@@ -203,6 +213,7 @@ def compute_series_metrics(
 
 
 # ── 3. Per-strategy and whole-folder evaluation ───────────────────────────────
+
 
 def evaluate_strategy(
     returns_df: pd.DataFrame,
@@ -267,6 +278,7 @@ def evaluate_all_strategies(
 
 # ── 4. Results formatting and persistence ─────────────────────────────────────
 
+
 def scalars_to_dataframe(all_results: dict[str, dict]) -> pd.DataFrame:
     """Convert scalar metrics to a tidy DataFrame.
 
@@ -308,7 +320,8 @@ def save_evaluation_results(
     ll = {
         algo: res["series"]["log_likelihood_series"]
         for algo, res in all_results.items()
-        if res.get("series") and res["series"].get("log_likelihood_series") is not None
+        if res.get("series")
+        and res["series"].get("log_likelihood_series") is not None
     }
     if ll:
         pd.DataFrame(ll).to_csv(folder / "log_likelihood.csv")
@@ -316,13 +329,16 @@ def save_evaluation_results(
     mah = {
         algo: res["series"]["mahalanobis_series"]
         for algo, res in all_results.items()
-        if res.get("series") and res["series"].get("mahalanobis_series") is not None
+        if res.get("series")
+        and res["series"].get("mahalanobis_series") is not None
     }
     if mah:
         pd.DataFrame(mah).to_csv(folder / "mahalanobis.csv")
 
 
+
 # ── 5. End-to-end entry point ─────────────────────────────────────────────────
+
 
 def run_evaluation(
     folder: Path | str,
@@ -362,3 +378,32 @@ def run_evaluation(
 
     print(f"  Results saved to: {folder}")
     return results
+
+
+if __name__ == "__main__":
+    from data_input import load_risk_free_rate, slice_timeframe
+
+    RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
+    RISK_FREE_PATH = (
+        Path(__file__).resolve().parent.parent.parent
+        / "datasets"
+        / "F-F_Research_Data_Factors_daily.csv"
+    )
+    START_DATE = "1980-01-01"
+
+    # Load global RF series (for KF datasets that don't have their own rf.csv)
+    rf_df = load_risk_free_rate(RISK_FREE_PATH)
+    global_rf = slice_timeframe(rf_df, START_DATE, None)["RF"].reset_index(
+        drop=True
+    )
+
+    for folder in sorted(RESULTS_DIR.iterdir()):
+        if not folder.is_dir():
+            continue
+        rf_csv = folder / "rf.csv"
+        if rf_csv.exists():
+            # Simulated datasets: rf.csv is Date-indexed, aligns with returns.csv
+            rf_series = pd.read_csv(rf_csv, index_col=0)["RF"]
+        else:
+            rf_series = global_rf
+        run_evaluation(folder, rf_series=rf_series)

@@ -1,0 +1,60 @@
+\begin{table}
+\caption{Daily summary statistics --- Panel A: Ken French value-weighted}
+\label{tab:summary_a}
+\begin{tabular}{llrrllrrrrrr}
+\toprule
+Name & Label & N & T & Start & End & Mean low & Mean high & Std low & Std high & Return low & Return high \\
+\midrule
+Industry & ind & 10 & 11615 & 1980-01-02 & 2026-01-30 & 0.045 & 0.059 & 0.942 & 1.711 & -20.080 & 19.180 \\
+Size & size & 10 & 11615 & 1980-01-02 & 2026-01-30 & 0.045 & 0.055 & 1.074 & 1.326 & -19.730 & 12.330 \\
+Book-to-market & beme & 10 & 11615 & 1980-01-02 & 2026-01-30 & 0.047 & 0.063 & 1.097 & 1.452 & -19.090 & 14.720 \\
+Long-term reversal & ltr & 10 & 11615 & 1980-01-02 & 2026-01-30 & 0.050 & 0.061 & 1.035 & 1.474 & -20.760 & 16.920 \\
+Momentum & mom & 10 & 11615 & 1980-01-02 & 2026-01-30 & 0.024 & 0.069 & 1.072 & 1.903 & -19.850 & 20.080 \\
+Short-term reversal & str & 10 & 11615 & 1980-01-02 & 2026-01-30 & -0.008 & 0.129 & 1.110 & 1.881 & -23.590 & 25.240 \\
+Size and book-to-market & size-beme & 6 & 11615 & 1980-01-02 & 2026-01-30 & 0.041 & 0.061 & 1.102 & 1.374 & -18.740 & 13.630 \\
+Size and long-term reversal & size-ltr & 6 & 11615 & 1980-01-02 & 2026-01-30 & 0.054 & 0.062 & 1.031 & 1.315 & -20.490 & 15.170 \\
+Size and momentum & size-mom & 6 & 11615 & 1980-01-02 & 2026-01-30 & 0.034 & 0.073 & 1.082 & 1.467 & -19.050 & 14.970 \\
+Size and short-term reversal & size-str & 6 & 11615 & 1980-01-02 & 2026-01-30 & 0.002 & 0.110 & 1.112 & 1.514 & -19.390 & 21.130 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\begin{table}
+\caption{Daily summary statistics --- Panel B: Ken French equal-weighted}
+\label{tab:summary_b}
+\begin{tabular}{llrrllrrrrrr}
+\toprule
+Name & Label & N & T & Start & End & Mean low & Mean high & Std low & Std high & Return low & Return high \\
+\midrule
+Industry & ind & 10 & 11615 & 1980-01-02 & 2026-01-30 & 0.059 & 0.095 & 0.891 & 1.845 & -26.260 & 23.180 \\
+Size & size & 10 & 11615 & 1980-01-02 & 2026-01-30 & 0.054 & 0.105 & 0.938 & 1.356 & -19.640 & 13.910 \\
+Book-to-market & beme & 10 & 11615 & 1980-01-02 & 2026-01-30 & 0.053 & 0.130 & 0.974 & 1.308 & -13.110 & 11.330 \\
+Long-term reversal & ltr & 10 & 11615 & 1980-01-02 & 2026-01-30 & 0.058 & 0.137 & 1.002 & 1.304 & -13.110 & 14.950 \\
+Momentum & mom & 10 & 11615 & 1980-01-02 & 2026-01-30 & 0.070 & 0.120 & 0.954 & 1.407 & -15.100 & 15.220 \\
+Short-term reversal & str & 10 & 11615 & 1980-01-02 & 2026-01-30 & -0.126 & 0.434 & 0.963 & 1.596 & -18.280 & 24.550 \\
+Size and book-to-market & size-beme & 6 & 11615 & 1980-01-02 & 2026-01-30 & 0.056 & 0.111 & 0.952 & 1.294 & -16.220 & 14.050 \\
+Size and long-term reversal & size-ltr & 6 & 11615 & 1980-01-02 & 2026-01-30 & 0.054 & 0.115 & 1.006 & 1.229 & -17.700 & 14.210 \\
+Size and momentum & size-mom & 6 & 11615 & 1980-01-02 & 2026-01-30 & 0.045 & 0.097 & 0.951 & 1.467 & -17.630 & 13.310 \\
+Size and short-term reversal & size-str & 6 & 11615 & 1980-01-02 & 2026-01-30 & -0.097 & 0.284 & 0.965 & 1.477 & -17.740 & 19.590 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\begin{table}
+\caption{Daily summary statistics --- Panel C: Simulated data (T=6000, N=5, seed=42)}
+\label{tab:summary_c}
+\begin{tabular}{llrrllrrrrrr}
+\toprule
+Name & Label & N & T & Start & End & Mean low & Mean high & Std low & Std high & Return low & Return high \\
+\midrule
+IID & iid & 5 & 6000 & 2000-01-03 & 2022-12-30 & 0.005 & 0.097 & 2.549 & 3.540 & -12.769 & 11.809 \\
+Regime shifts & reg & 5 & 6000 & 2000-01-03 & 2022-12-30 & 0.030 & 0.118 & 2.549 & 3.510 & -14.196 & 15.580 \\
+Sudden break & break & 5 & 6000 & 2000-01-03 & 2022-12-30 & -0.017 & 0.074 & 2.549 & 3.541 & -12.840 & 11.809 \\
+Mean reverting & mr & 5 & 6000 & 2000-01-03 & 2022-12-30 & -0.031 & 0.051 & 2.839 & 3.618 & -13.659 & 17.492 \\
+Covariance break & cov_break & 5 & 6000 & 2000-01-03 & 2022-12-30 & 0.002 & 0.091 & 2.570 & 3.678 & -13.274 & 13.214 \\
+Stochastic volatility & stoch_vol & 5 & 6000 & 2000-01-03 & 2022-12-30 & 0.016 & 0.129 & 2.885 & 3.657 & -13.148 & 17.049 \\
+\bottomrule
+\end{tabular}
+\end{table}

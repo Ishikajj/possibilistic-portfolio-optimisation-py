@@ -164,6 +164,46 @@ def _simulate_factor_regime_mean(
     return rng.normal(loc=mu_t, scale=sigma_g, size=T)
 
 
+def _simulate_factor_vol_break(
+    rng: np.random.Generator,
+    T: int,
+    break_fraction: float = 0.5,
+    sigma_pre: float = 0.10 / np.sqrt(252.0),
+    sigma_post: float = 0.25 / np.sqrt(252.0),
+    mu_bar: float = 0.08 / 252.0,
+) -> np.ndarray:
+    """Factor with constant mean but a permanent jump in volatility at break_fraction * T."""
+    break_t = int(T * break_fraction)
+    sigma_t = np.where(np.arange(T) < break_t, sigma_pre, sigma_post)
+    return rng.normal(loc=mu_bar, scale=sigma_t, size=T)
+
+
+def _simulate_factor_stochastic_vol(
+    rng: np.random.Generator,
+    T: int,
+    mu_bar: float = 0.08 / 252.0,
+    v_bar: float = (0.16 / np.sqrt(252.0)) ** 2,
+    theta_v: float = 0.05,
+    xi: float = 0.2,
+) -> np.ndarray:
+    """Factor with constant mean and log-OU stochastic variance.
+
+    log(v_{t+1}) = log(v_t) + theta_v * (log(v_bar) - log(v_t)) + xi * eps_t
+    g_t ~ N(mu_bar, v_t)
+
+    With theta_v=0.05, half-life ~14 trading days. With xi=0.2, steady-state
+    annualised vol ranges roughly [8%, 30%].
+    """
+    log_v = np.empty(T, dtype=float)
+    log_v[0] = np.log(v_bar)
+    log_v_bar = np.log(v_bar)
+    noise = rng.normal(0.0, xi, size=T - 1)
+    for t in range(T - 1):
+        log_v[t + 1] = log_v[t] + theta_v * (log_v_bar - log_v[t]) + noise[t]
+    sigma_t = np.sqrt(np.exp(log_v))
+    return rng.normal(loc=mu_bar, scale=sigma_t, size=T)
+
+
 def _simulate_factor_model_excess_returns(
     rng: np.random.Generator,
     g: np.ndarray,
@@ -260,4 +300,54 @@ def simulate_rbpc_data_regime_shifts(
 
     excess, _B = _simulate_factor_model_excess_returns(rng, g, n_assets)
 
+    return _pack_simulation_frames(dates, excess, RF, g)
+
+
+def simulate_sudden_covariance_break(
+    T: int = 252 * 20,
+    start_date: str = "2000-01-03",
+    n_assets: int = 5,
+    seed: int = 42,
+    break_fraction: float = 0.5,
+    sigma_pre: float = 0.10 / np.sqrt(252.0),
+    sigma_post: float = 0.25 / np.sqrt(252.0),
+    mu_bar: float = 0.08 / 252.0,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Permanent jump in factor volatility at break_fraction * T; mean is constant.
+
+    Pre-break annualised factor vol: ~10%.  Post-break: ~25%.
+    Sigma_t = B B' sigma_g_t^2 + Diag(sigma_idio^2) jumps at the break.
+    Mirrors DGP 3 (sudden_break) but in covariance rather than mean.
+    """
+    rng = np.random.default_rng(seed)
+    dates = _make_trading_dates(start_date, T)
+    RF = _simulate_rf(rng, T)
+    g = _simulate_factor_vol_break(rng, T, break_fraction, sigma_pre, sigma_post, mu_bar)
+    excess, _ = _simulate_factor_model_excess_returns(rng, g, n_assets)
+    return _pack_simulation_frames(dates, excess, RF, g)
+
+
+def simulate_stochastic_volatility(
+    T: int = 252 * 20,
+    start_date: str = "2000-01-03",
+    n_assets: int = 5,
+    seed: int = 42,
+    mu_bar: float = 0.08 / 252.0,
+    v_bar: float = (0.16 / np.sqrt(252.0)) ** 2,
+    theta_v: float = 0.05,
+    xi: float = 0.2,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Constant factor mean with log-OU stochastic volatility.
+
+    log(v_{t+1}) = log(v_t) + theta_v*(log(v_bar) - log(v_t)) + xi*eps_t
+
+    With theta_v=0.05, half-life ~14 trading days.  Covariance varies
+    continuously; tests whether model averaging tracks volatility clustering.
+    Mirrors DGP 4 (mean_reverting) but in covariance rather than mean.
+    """
+    rng = np.random.default_rng(seed)
+    dates = _make_trading_dates(start_date, T)
+    RF = _simulate_rf(rng, T)
+    g = _simulate_factor_stochastic_vol(rng, T, mu_bar, v_bar, theta_v, xi)
+    excess, _ = _simulate_factor_model_excess_returns(rng, g, n_assets)
     return _pack_simulation_frames(dates, excess, RF, g)

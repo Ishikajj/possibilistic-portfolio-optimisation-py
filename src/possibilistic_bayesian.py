@@ -423,11 +423,13 @@ def _gaussian_mahalanobis_distance(
 ) -> float:
     """Mahalanobis distance between two Gaussian means using pooled covariance.
 
-        d = sqrt((mu1 - mu2)^T * ((Sigma1 + Sigma2) / 2)^{-1} * (mu1 - mu2))
+    d = sqrt((mu1 - mu2)^T * ((Sigma1 + Sigma2) / 2)^{-1} * (mu1 - mu2))
     """
     eps = 1e-10
     n = Sigma1.shape[0]
-    Sigma_pool = 0.5 * (Sigma1 + Sigma1.T + Sigma2 + Sigma2.T) + eps * np.eye(n, dtype=float)
+    Sigma_pool = 0.5 * (Sigma1 + Sigma1.T + Sigma2 + Sigma2.T) + eps * np.eye(
+        n, dtype=float
+    )
     d = mu1 - mu2
     try:
         quad = float(d @ np.linalg.solve(Sigma_pool, d))
@@ -558,7 +560,12 @@ def _merge_models_mahalanobis(
     nu_bandwidth: int = 50,
     k_neighbours: int = 5,
 ) -> tuple[
-    list[np.ndarray], list[float], list[np.ndarray], list[float], np.ndarray, float
+    list[np.ndarray],
+    list[float],
+    list[np.ndarray],
+    list[float],
+    np.ndarray,
+    float,
 ]:
     """Merge redundant model pairs using Mahalanobis distance on Gaussian summaries.
 
@@ -605,7 +612,9 @@ def _merge_models_mahalanobis(
                     break
 
                 Sigma_j = Lambdas[j] / nu_arr[j]
-                mdist = _gaussian_mahalanobis_distance(mus[i], Sigma_i, mus[j], Sigma_j)
+                mdist = _gaussian_mahalanobis_distance(
+                    mus[i], Sigma_i, mus[j], Sigma_j
+                )
 
                 w = poss_norm[i] * poss_norm[j]
                 m_sum += w * mdist
@@ -619,8 +628,16 @@ def _merge_models_mahalanobis(
             break
 
         mu_m, kappa_m, Lambda_m, nu_m, poss_m = _merge_two_models(
-            mus[best_i], kappas[best_i], Lambdas[best_i], nus[best_i], float(poss_arr[best_i]),
-            mus[best_j], kappas[best_j], Lambdas[best_j], nus[best_j], float(poss_arr[best_j]),
+            mus[best_i],
+            kappas[best_i],
+            Lambdas[best_i],
+            nus[best_i],
+            float(poss_arr[best_i]),
+            mus[best_j],
+            kappas[best_j],
+            Lambdas[best_j],
+            nus[best_j],
+            float(poss_arr[best_j]),
             n,
         )
 
@@ -733,13 +750,14 @@ def run_core(
     returns_df: pd.DataFrame,
     burn_in: int = 1000,
     periods_until_investment: int = 0,
-    merge_threshold: float = 0.01,
+    merge_threshold: float = 1,
     max_models: int = 100,
     keep_newest: bool = True,
     nu_bandwidth: int = 50,
     k_neighbours: int = 5,
     gamma: float = 1.0,
     eta: float = 1.0,
+    device: str = "cpu",
 ) -> tuple[
     pd.DataFrame,
     dict[str, np.ndarray],
@@ -809,6 +827,7 @@ def run_core(
             nus=nus,
             n_jobs=6,
             random_state=t,  # vary per step for diversity
+            device=device,
         )
 
         possibilities = _update_possibilities(
@@ -858,15 +877,17 @@ def run_core(
         n_models_post_prune = len(mus)
         mahalanobis_avg = np.nan
 
-        mus, kappas, Lambdas, nus, possibilities, mahalanobis_avg = _merge_models_mahalanobis(
-            mus,
-            kappas,
-            Lambdas,
-            nus,
-            possibilities,
-            merge_threshold=merge_threshold,
-            nu_bandwidth=nu_bandwidth,
-            k_neighbours=k_neighbours,
+        mus, kappas, Lambdas, nus, possibilities, mahalanobis_avg = (
+            _merge_models_mahalanobis(
+                mus,
+                kappas,
+                Lambdas,
+                nus,
+                possibilities,
+                merge_threshold=merge_threshold,
+                nu_bandwidth=nu_bandwidth,
+                k_neighbours=k_neighbours,
+            )
         )
 
         n_models_post_merge = len(mus)

@@ -41,7 +41,10 @@ def test_call_all_datasets():
 
     datasets = [
         Path("../datasets/10_Industry_Portfolios_Daily.csv"),
-        Path("../datasets/6_Portfolios_size_btm.csv"),
+        (
+            Path("../datasets/6_Portfolios_size_btm.csv"),
+            "Number of Firms in Portfolios",
+        ),
     ]
 
     folders = call_all_datasets(
