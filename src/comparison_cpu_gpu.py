@@ -61,20 +61,37 @@ POSSIBILISTIC_ALGOS = [
 ]
 
 
+def _rel_error(abs_diff: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    """Element-wise relative error, ignoring near-zero reference values."""
+    denom = np.abs(ref)
+    mask = denom > 1e-12
+    out = np.full_like(abs_diff, np.nan)
+    out[mask] = abs_diff[mask] / denom[mask]
+    return out
+
+
 def compare_weights(algo: str) -> None:
     cpu = pd.read_csv(CPU_FOLDER / f"{algo}_weights.csv", index_col=0)
     gpu = pd.read_csv(GPU_FOLDER / f"{algo}_weights.csv", index_col=0)
-    diff = (cpu - gpu).abs()
+    abs_diff = (cpu - gpu).abs().values
+    rel = _rel_error(abs_diff, cpu.values)
     print(
-        f"  {algo}_weights  max={diff.max().max():.2e}  mean={diff.mean().mean():.2e}"
+        f"  {algo}_weights"
+        f"  abs max={abs_diff.max():.2e} mean={abs_diff.mean():.2e}"
+        f"  rel max={np.nanmax(rel):.2e} mean={np.nanmean(rel):.2e}"
     )
 
 
 def compare_npy(algo: str, suffix: str) -> None:
     cpu = np.load(CPU_FOLDER / f"{algo}_{suffix}.npy")
     gpu = np.load(GPU_FOLDER / f"{algo}_{suffix}.npy")
-    diff = np.abs(cpu - gpu)
-    print(f"  {algo}_{suffix}  max={diff.max():.2e}  mean={diff.mean():.2e}")
+    abs_diff = np.abs(cpu - gpu)
+    rel = _rel_error(abs_diff, cpu)
+    print(
+        f"  {algo}_{suffix}"
+        f"  abs max={abs_diff.max():.2e} mean={abs_diff.mean():.2e}"
+        f"  rel max={np.nanmax(rel):.2e} mean={np.nanmean(rel):.2e}"
+    )
 
 
 print("\n" + "=" * 60)
