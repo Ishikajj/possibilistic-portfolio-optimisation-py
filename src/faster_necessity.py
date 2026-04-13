@@ -337,7 +337,7 @@ def _best_bracket_for_sigma_cache(
     kappa: float,
     t_min: float = -2.5,
     t_max: float = 3.5,
-    grid_size: int = 81,
+    grid_size: int = 1000,
 ) -> float:
     """Compute sup_mu[(1-h_bar)f_bar] for one fixed Sigma using cached terms."""
     d2 = float(cache["d2"])
@@ -751,13 +751,14 @@ def _log_f_modes_batch_gpu(Lambdas_t, nus_t):
     M, n, _ = Lambdas_t.shape
     _, logdet_Lambda = torch.linalg.slogdet(Lambdas_t)  # (M,)
     log_f_modes = (
-        -0.5 * nus_t * (logdet_Lambda - n * torch.log(nus_t))
-        - 0.5 * nus_t * n
+        -0.5 * nus_t * (logdet_Lambda - n * torch.log(nus_t)) - 0.5 * nus_t * n
     )
     return log_f_modes  # (M,)
 
 
-def _deterministic_seeds_batch_gpu(y_t, mus_t, kappas_t, Lambdas_t, nus_t, sigma_floor):
+def _deterministic_seeds_batch_gpu(
+    y_t, mus_t, kappas_t, Lambdas_t, nus_t, sigma_floor
+):
     """Build 5 deterministic Sigma seeds per model, fully batched.
 
     Seeds mirror those in _deterministic_sigma_seeds: prior mode, posterior
@@ -778,7 +779,9 @@ def _deterministic_seeds_batch_gpu(y_t, mus_t, kappas_t, Lambdas_t, nus_t, sigma
     outer_diff = diff.unsqueeze(-1) * diff.unsqueeze(-2)  # (M, n, n)
     kappa_ratio = (kappas_t / (kappas_t + 1.0)).unsqueeze(-1).unsqueeze(-1)
     posterior_Lambda = Lambdas_t + kappa_ratio * outer_diff
-    posterior_Sigma = posterior_Lambda / (nus_t + 1.0).unsqueeze(-1).unsqueeze(-1)
+    posterior_Sigma = posterior_Lambda / (nus_t + 1.0).unsqueeze(-1).unsqueeze(
+        -1
+    )
     midpoint = 0.5 * (Sigma_mode + posterior_Sigma)
     tight = 0.5 * midpoint
 
@@ -823,7 +826,9 @@ def _sample_iw_batch_gpu(Lambdas_t, nus_t, K, sigma_floor, dev):
     # Degrees of freedom for chi2 diagonal entries: dof[m, i] = nu_m - i
     dof = (
         nus_t.unsqueeze(-1) - torch.arange(n, device=dev, dtype=dtype)
-    ).clamp(min=1.0)  # (M, n)
+    ).clamp(
+        min=1.0
+    )  # (M, n)
     dof_exp = dof.unsqueeze(1).expand(M, K, n)  # (M, K, n)
 
     # chi2(df) = Gamma(df/2, rate=0.5)
@@ -852,7 +857,9 @@ def _sample_iw_batch_gpu(Lambdas_t, nus_t, K, sigma_floor, dev):
     L_exp = L_Lambda.unsqueeze(1).expand(M, K, n, n)  # (M, K, n, n)
     W_flat = W.reshape(M * K, n, n)
     LT_flat = L_exp.transpose(-2, -1).reshape(M * K, n, n)
-    WinvLT = torch.linalg.solve(W_flat, LT_flat).reshape(M, K, n, n)  # (M, K, n, n)
+    WinvLT = torch.linalg.solve(W_flat, LT_flat).reshape(
+        M, K, n, n
+    )  # (M, K, n, n)
     IW = L_exp @ WinvLT  # (M, K, n, n)
 
     IW = 0.5 * (IW + IW.transpose(-2, -1)) + sigma_floor * eye
@@ -895,9 +902,9 @@ def _build_cache_batch_gpu(
 
     nu_flat = nus_t.unsqueeze(1).expand(M, K).reshape(M * K)
     lf_flat = log_f_modes.unsqueeze(1).expand(M, K).reshape(M * K)
-    C_flat = (
-        -0.5 * nu_flat * logdets - 0.5 * trace_term - lf_flat
-    ).clamp(max=0.0)  # (M*K,)
+    C_flat = (-0.5 * nu_flat * logdets - 0.5 * trace_term - lf_flat).clamp(
+        max=0.0
+    )  # (M*K,)
 
     valid = signs > 0
     d2_flat = torch.where(valid, d2_flat, torch.zeros_like(d2_flat))
@@ -906,7 +913,9 @@ def _build_cache_batch_gpu(
     return d2_flat.reshape(M, K), C_flat.reshape(M, K)
 
 
-def _bracket_values_batch_gpu(d2, C, kappas_t, t_min=-2.5, t_max=3.5, grid_size=81):
+def _bracket_values_batch_gpu(
+    d2, C, kappas_t, t_min=-2.5, t_max=3.5, grid_size=1000
+):
     """Evaluate (1 - h_bar) * f_bar over a t-grid for all (M, K) candidates.
 
     Mirrors _best_bracket_for_sigma_cache but batched across all M models and
@@ -920,19 +929,23 @@ def _bracket_values_batch_gpu(d2, C, kappas_t, t_min=-2.5, t_max=3.5, grid_size=
     dev = d2.device
     dtype = d2.dtype
 
-    ts = torch.linspace(t_min, t_max, grid_size, device=dev, dtype=dtype)  # (G,)
+    ts = torch.linspace(
+        t_min, t_max, grid_size, device=dev, dtype=dtype
+    )  # (G,)
 
-    d2e = d2.unsqueeze(-1)                        # (M, K, 1)
-    Ce = C.unsqueeze(-1)                          # (M, K, 1)
+    d2e = d2.unsqueeze(-1)  # (M, K, 1)
+    Ce = C.unsqueeze(-1)  # (M, K, 1)
     kpe = kappas_t.unsqueeze(1).unsqueeze(2).clamp(min=1e-12)  # (M, 1, 1)
-    ts_e = ts.reshape(1, 1, grid_size)            # (1, 1, G)
+    ts_e = ts.reshape(1, 1, grid_size)  # (1, 1, G)
 
-    log_A = -0.5 * (1.0 - ts_e) ** 2 * d2e       # (M, K, G)
+    log_A = -0.5 * (1.0 - ts_e) ** 2 * d2e  # (M, K, G)
     A_t = torch.exp(torch.clamp(log_A, max=0.0))  # (M, K, G)
-    threshold = kpe / (kpe + 1.0)                 # (M, 1, 1)
+    threshold = kpe / (kpe + 1.0)  # (M, 1, 1)
 
     # z*(t): closed-form maximizer over the Q-orthogonal radius
-    log_z_raw = 2.0 * (torch.clamp(log_A, max=0.0) + torch.log((kpe + 1.0) / kpe))
+    log_z_raw = 2.0 * (
+        torch.clamp(log_A, max=0.0) + torch.log((kpe + 1.0) / kpe)
+    )
     z_star = torch.where(
         A_t <= threshold,
         torch.zeros_like(log_z_raw),
@@ -940,7 +953,7 @@ def _bracket_values_batch_gpu(d2, C, kappas_t, t_min=-2.5, t_max=3.5, grid_size=
     )  # (M, K, G)
 
     log_h = -0.5 * ((1.0 - ts_e) ** 2 * d2e + z_star)
-    log_f = Ce - 0.5 * kpe * (ts_e ** 2 * d2e + z_star)
+    log_f = Ce - 0.5 * kpe * (ts_e**2 * d2e + z_star)
     h_bar = torch.exp(torch.clamp(log_h, max=0.0))
     f_bar = torch.exp(torch.clamp(log_f, max=0.0))
     values = ((1.0 - h_bar) * f_bar).clamp(0.0, 1.0)  # (M, K, G)
@@ -959,9 +972,8 @@ def _pack_cholesky_batch_gpu(Sigmas, sigma_floor):
     dev = Sigmas.device
     dtype = Sigmas.dtype
 
-    S = (
-        0.5 * (Sigmas + Sigmas.transpose(-2, -1))
-        + sigma_floor * torch.eye(n, device=dev, dtype=dtype)
+    S = 0.5 * (Sigmas + Sigmas.transpose(-2, -1)) + sigma_floor * torch.eye(
+        n, device=dev, dtype=dtype
     )
     L = torch.linalg.cholesky(S)  # (M, E, n, n)
 
@@ -990,14 +1002,15 @@ def _unpack_cholesky_batch_gpu(theta, n, sigma_floor):
     L[:, :, tril_r, tril_c] = theta
 
     Sigma = L @ L.transpose(-2, -1)
-    Sigma = (
-        0.5 * (Sigma + Sigma.transpose(-2, -1))
-        + sigma_floor * torch.eye(n, device=dev, dtype=dtype)
+    Sigma = 0.5 * (Sigma + Sigma.transpose(-2, -1)) + sigma_floor * torch.eye(
+        n, device=dev, dtype=dtype
     )
     return Sigma
 
 
-def _perturb_elites_batch_gpu(elites, per_round_samples, current_scale, sigma_floor):
+def _perturb_elites_batch_gpu(
+    elites, per_round_samples, current_scale, sigma_floor
+):
     """Generate new Sigma candidates by perturbing elites in Cholesky space.
 
     Mirrors the adaptive perturbation loop from _adaptive_sigma_rounds but
@@ -1013,16 +1026,22 @@ def _perturb_elites_batch_gpu(elites, per_round_samples, current_scale, sigma_fl
     dtype = elites.dtype
     dim_theta = n * (n + 1) // 2
 
-    theta_elites = _pack_cholesky_batch_gpu(elites, sigma_floor)  # (M, E, dim_theta)
+    theta_elites = _pack_cholesky_batch_gpu(
+        elites, sigma_floor
+    )  # (M, E, dim_theta)
 
     elite_idx = torch.randint(0, E, (M, S), device=dev)  # (M, S)
     idx_exp = elite_idx.unsqueeze(-1).expand(M, S, dim_theta)
     base_thetas = theta_elites.gather(1, idx_exp)  # (M, S, dim_theta)
 
-    noise = torch.randn(M, S, dim_theta, device=dev, dtype=dtype) * current_scale
+    noise = (
+        torch.randn(M, S, dim_theta, device=dev, dtype=dtype) * current_scale
+    )
     new_thetas = base_thetas + noise
 
-    return _unpack_cholesky_batch_gpu(new_thetas, n, sigma_floor)  # (M, S, n, n)
+    return _unpack_cholesky_batch_gpu(
+        new_thetas, n, sigma_floor
+    )  # (M, S, n, n)
 
 
 def _necessity_scores_gpu(
@@ -1071,11 +1090,17 @@ def _necessity_scores_gpu(
     if random_state is not None:
         torch.manual_seed(int(random_state))
 
-    mus_t = torch.tensor(np.stack(mus), dtype=dtype, device=dev)            # (M, n)
-    kappas_t = torch.tensor(np.array(kappas, dtype=float), dtype=dtype, device=dev)  # (M,)
-    Lambdas_t = torch.tensor(np.stack(Lambdas), dtype=dtype, device=dev)    # (M, n, n)
-    nus_t = torch.tensor(np.array(nus, dtype=float), dtype=dtype, device=dev)  # (M,)
-    y_t = torch.tensor(y_next, dtype=dtype, device=dev)                     # (n,)
+    mus_t = torch.tensor(np.stack(mus), dtype=dtype, device=dev)  # (M, n)
+    kappas_t = torch.tensor(
+        np.array(kappas, dtype=float), dtype=dtype, device=dev
+    )  # (M,)
+    Lambdas_t = torch.tensor(
+        np.stack(Lambdas), dtype=dtype, device=dev
+    )  # (M, n, n)
+    nus_t = torch.tensor(
+        np.array(nus, dtype=float), dtype=dtype, device=dev
+    )  # (M,)
+    y_t = torch.tensor(y_next, dtype=dtype, device=dev)  # (n,)
 
     log_f_modes = _log_f_modes_batch_gpu(Lambdas_t, nus_t)  # (M,)
 
@@ -1104,14 +1129,20 @@ def _necessity_scores_gpu(
 
         K_cur = Sigmas_batch.shape[1]
         actual_elite = min(elite_count, K_cur)
-        _, top_idx = torch.topk(values, actual_elite, dim=1)  # (M, actual_elite)
-        idx_exp = top_idx.unsqueeze(-1).unsqueeze(-1).expand(M, actual_elite, n, n)
+        _, top_idx = torch.topk(
+            values, actual_elite, dim=1
+        )  # (M, actual_elite)
+        idx_exp = (
+            top_idx.unsqueeze(-1).unsqueeze(-1).expand(M, actual_elite, n, n)
+        )
         elites = Sigmas_batch.gather(1, idx_exp)  # (M, actual_elite, n, n)
 
         current_scale = perturb_scale / (1.0 + round_idx)
-        Sigmas_batch = _perturb_elites_batch_gpu(
-            elites, per_round_samples, current_scale, sigma_floor
-        )  # (M, per_round_samples, n, n)
+        n_perturb = max(1, per_round_samples - actual_elite)
+        perturbed = _perturb_elites_batch_gpu(
+            elites, n_perturb, current_scale, sigma_floor
+        )  # (M, n_perturb, n, n)
+        Sigmas_batch = torch.cat([elites, perturbed], dim=1)  # (M, actual_elite+n_perturb, n, n)
 
     raw_scores = (1.0 - best_values).clamp(min=0.0)
     return raw_scores.cpu().numpy()

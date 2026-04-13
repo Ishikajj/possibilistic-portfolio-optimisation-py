@@ -369,7 +369,7 @@ def call_all_datasets(
     for entry in portfolios_paths:
         if isinstance(entry, tuple):
             raw_path, ew_end_override = entry
-        else
+        else:
             raw_path = entry
             ew_end_override = None
         p = Path(raw_path)
@@ -575,7 +575,10 @@ def main():
         "../datasets/6_Portfolios_size_str.csv",
         "../datasets/10_Portfolios_Prior_momentum.csv",
         "../datasets/10_Portfolios_Prior_str.csv",
-        ("../datasets/6_Portfolios_size_btm.csv", "Number of Firms in Portfolios")
+        (
+            "../datasets/6_Portfolios_size_btm.csv",
+            "Number of Firms in Portfolios",
+        ),
     ]
     risk_free_path = "../datasets/F-F_Research_Data_Factors_daily.csv"
 

@@ -15,7 +15,6 @@ dependencies = [
     "pandas>=3.0.1",
     "pandas-stubs>=3.0.0.260204",
     "scipy>=1.17.1",
-    "torch>=2.11.0",
 ]
 
 [project.optional-dependencies]

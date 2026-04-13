@@ -7,7 +7,9 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-assert torch.cuda.is_available(), "CUDA not available — check drivers and torch installation"
+assert (
+    torch.cuda.is_available()
+), "CUDA not available — check drivers and torch installation"
 
 from data_input import (
     load_excess_returns_from_kenneth_french_path,
@@ -15,22 +17,22 @@ from data_input import (
 )
 from pipeline_wrapper import calculate_all_functions_perdatasets
 
-PORTFOLIOS_PATH = Path("../datasets/6_Portfolios_size_btm.csv")
+PORTFOLIOS_PATH = Path("../datasets/10_Industry_Portfolios_Daily.csv")
 RF_PATH = Path("../datasets/F-F_Research_Data_Factors_daily.csv")
 
 excess_df = load_excess_returns_from_kenneth_french_path(
     portfolios_path=PORTFOLIOS_PATH,
     risk_free_path=RF_PATH,
     start_date="1980-01-01",
-    start_marker="Average Value Weighted Returns -- Daily",
-    end_marker="Average Equal Weighted Returns -- Daily",
+    start_marker="Average Equal Weighted Returns -- Daily",
+    end_marker=None,
 )
 returns_df = prepare_returns(excess_df)
 
 t0 = time.perf_counter()
 calculate_all_functions_perdatasets(
     dataset=returns_df,
-    dataset_name="6_Portfolios_size_btm_equal_weighted_gpu",
+    dataset_name="10_Industry_Portfolios_Daily_equal_weighted_gpu",
     burn_in=500,
     periods_until_investment=500,
     theta=1.0,
@@ -51,8 +53,8 @@ print(f"\nGPU time: {gpu_time:.1f}s ({gpu_time / 60:.1f} min)")
 
 # ── Comparison
 
-CPU_FOLDER = Path("results/6_Portfolios_size_btm_equal_weighted")
-GPU_FOLDER = Path("results/6_Portfolios_size_btm_equal_weighted_gpu")
+CPU_FOLDER = Path("results/10_Industry_Portfolios_Daily_equal_weighted")
+GPU_FOLDER = Path("results/10_Industry_Portfolios_Daily_equal_weighted_gpu")
 
 POSSIBILISTIC_ALGOS = [
     "possibilistic_masked",
@@ -89,7 +91,7 @@ def compare_npy(algo: str, suffix: str) -> None:
     rel = _rel_error(abs_diff, cpu)
     print(
         f"  {algo}_{suffix}"
-        f"  abs max={abs_diff.max():.2e} mean={abs_diff.mean():.2e}"
+        f"  abs max={np.nanmax(abs_diff):.2e} mean={np.nanmean(abs_diff):.2e}"
         f"  rel max={np.nanmax(rel):.2e} mean={np.nanmean(rel):.2e}"
     )
 
