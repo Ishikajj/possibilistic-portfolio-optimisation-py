@@ -322,6 +322,7 @@ def call_all_datasets(
     eta: float = 1.0,
     rolling_window_long: int = 250,
     rolling_window_short: int = 63,
+    device: str = "cpu",
 ) -> list[Path]:
     """Run the full pipeline on every Kenneth French dataset in two passes.
 
@@ -418,6 +419,7 @@ def call_all_datasets(
                 rolling_window_long=rolling_window_long,
                 rolling_window_short=rolling_window_short,
                 output_dir=output_dir,
+                device=device,
             )
             output_folders.append(folder)
 
@@ -442,6 +444,7 @@ def call_all_simulated_datasets(
     eta: float = 1.0,
     rolling_window_long: int = 250,
     rolling_window_short: int = 63,
+    device: str = "cpu",
 ) -> list[Path]:
     """Run the full algorithm suite on all saved simulated datasets.
 
@@ -500,6 +503,7 @@ def call_all_simulated_datasets(
                 rolling_window_long=rolling_window_long,
                 rolling_window_short=rolling_window_short,
                 output_dir=output_dir,
+                device=device,
             )
 
             # Copy RF into output folder so evaluation pipeline can load it.
@@ -514,8 +518,8 @@ def call_all_simulated_datasets(
 
 def main2():
     SIM_DATA_DIR = Path("../datasets/simulated")
-    SIM_T = 6000
-    SIM_N = 5
+    SIM_T = 10000
+    SIM_N = 10
     SIM_SEED = 42
 
     sim_files = [
@@ -557,14 +561,15 @@ def main2():
         burn_in=500,
         periods_until_investment=500,
         theta=1.0,
-        max_models=80,
-        merge_threshold=1.0,
+        max_models=100,
+        merge_threshold=0.15,
         nu_bandwidth=50,
         k_neighbours=5,
         gamma=1.0,
         eta=1.0,
         rolling_window_long=252,
         rolling_window_short=63,
+        device="cuda",
     )
 
 
@@ -575,6 +580,10 @@ def main():
         "../datasets/6_Portfolios_size_str.csv",
         "../datasets/10_Portfolios_Prior_momentum.csv",
         "../datasets/10_Portfolios_Prior_str.csv",
+        "../datasets/10_Industry_Portfolios_Daily.csv",
+        "../datasets/10_Portfolios_Formed_on_booktomarket.csv",
+        "../datasets/10_Portfolios_Formed_on_ME_size.csv",
+        "../datasets/6_Portfolios_size_ltr.csv",
         (
             "../datasets/6_Portfolios_size_btm.csv",
             "Number of Firms in Portfolios",
@@ -590,9 +599,9 @@ def main():
 
     theta = 1
 
-    max_models = 80
+    max_models = 100
 
-    merge_threshold = 1.0
+    merge_threshold = 0.15
 
     nu_bandwidth = 50
 
@@ -620,8 +629,10 @@ def main():
         eta=eta,
         rolling_window_long=rolling_window_long,
         rolling_window_short=rolling_window_short,
+        device="cuda",
     )
 
 
 if __name__ == "__main__":
+    main()
     main2()

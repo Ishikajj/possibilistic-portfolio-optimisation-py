@@ -16,7 +16,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from numpy.linalg import slogdet
-from scipy.special import multigammaln
 from data_input import (
     load_excess_returns_from_kenneth_french_path,
     prepare_returns,
@@ -143,14 +142,13 @@ def _append_new_model(
     mus.append(np.full(n, mu_bar, dtype=float))
     kappas.append(1.0)
     Lambdas.append(lam_bar * np.eye(n, dtype=float))
-    nus.append(float(n + 2))  # from our initial proof
+    nus.append(1.0)
 
     if possibilities.size == 0:
         return np.array([1.0], dtype=float)
     return np.concatenate([possibilities, np.array([1.0], dtype=float)])
 
 
-# to check
 def _log_marginal_likelihood(
     R_t: np.ndarray,
     mu: np.ndarray,
@@ -158,25 +156,30 @@ def _log_marginal_likelihood(
     Lambda: np.ndarray,
     nu: float,
 ) -> float:
-    """Log NIW marginal likelihood log L(R_t | m, F_{t-1}). This remains the same from the probabilistic case."""
+    """Closed-form possibilistic score log L(r_t | m, F_{t-1}).
+
+    L = (2*pi*e)^{-n/2} * |Lambda|^{nu/2} * nu^{-n*nu/2}
+        * nu1^{n*nu1/2} * |Lambda1|^{-nu1/2}
+
+    where Lambda1 = Lambda + (kappa/(kappa+1)) * outer(d, d), nu1 = nu + 1.
+    """
     n = len(R_t)
     k1 = kappa + 1.0
     nu1 = nu + 1.0
     d = R_t - mu
-    L1 = Lambda + (kappa / k1) * np.outer(d, d)
+    Lambda1 = Lambda + (kappa / k1) * np.outer(d, d)
 
-    s0, ld0 = np.linalg.slogdet(Lambda)
-    s1, ld1 = slogdet(L1)
+    s0, ld0 = slogdet(Lambda)
+    s1, ld1 = slogdet(Lambda1)
     if s0 <= 0 or s1 <= 0:
         return -np.inf
 
     return (
-        multigammaln(nu1 / 2.0, n)
-        - multigammaln(nu / 2.0, n)
-        + (n / 2.0) * np.log(kappa / k1)
+        -(n / 2.0) * np.log(2.0 * np.pi * np.e)
         + (nu / 2.0) * ld0
+        - (n * nu / 2.0) * np.log(nu)
+        + (n * nu1 / 2.0) * np.log(nu1)
         - (nu1 / 2.0) * ld1
-        - (n / 2.0) * np.log(np.pi)
     )
 
 
@@ -444,11 +447,11 @@ def _merge_models(
     Lambdas: list[np.ndarray],
     nus: list[float],
     possibilities: np.ndarray,
-    merge_threshold: float = 0.01,
+    merge_threshold: float = 0.1,
     nu_bandwidth: int = 50,
     k_neighbours: int = 5,
 ) -> tuple[
-    list[np.ndarray], list[float], list[np.ndarray], list[float], np.ndarray
+    list[np.ndarray], list[float], list[np.ndarray], list[float], np.ndarray, float
 ]:
     """Merge genuinely redundant model pairs using Gaussian Hellinger distance.
 
@@ -750,7 +753,7 @@ def run_core(
     returns_df: pd.DataFrame,
     burn_in: int = 1000,
     periods_until_investment: int = 0,
-    merge_threshold: float = 1,
+    merge_threshold: float = 0.15,
     max_models: int = 100,
     keep_newest: bool = True,
     nu_bandwidth: int = 50,
@@ -875,19 +878,17 @@ def run_core(
         )
 
         n_models_post_prune = len(mus)
-        mahalanobis_avg = np.nan
+        hellinger_avg = np.nan
 
-        mus, kappas, Lambdas, nus, possibilities, mahalanobis_avg = (
-            _merge_models_mahalanobis(
-                mus,
-                kappas,
-                Lambdas,
-                nus,
-                possibilities,
-                merge_threshold=merge_threshold,
-                nu_bandwidth=nu_bandwidth,
-                k_neighbours=k_neighbours,
-            )
+        mus, kappas, Lambdas, nus, possibilities, hellinger_avg = _merge_models(
+            mus,
+            kappas,
+            Lambdas,
+            nus,
+            possibilities,
+            merge_threshold=merge_threshold,
+            nu_bandwidth=nu_bandwidth,
+            k_neighbours=k_neighbours,
         )
 
         n_models_post_merge = len(mus)
@@ -903,7 +904,7 @@ def run_core(
                 "frac_nec_zero": float(np.mean(necessities == 0.0)),
                 "nu_mean": float(np.mean(nus)),
                 "nu_min": float(np.min(nus)),
-                "mahalanobis_avg": mahalanobis_avg,
+                "hellinger_avg": hellinger_avg,
             }
         )
         sum_R += R_t

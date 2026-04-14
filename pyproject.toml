@@ -2,7 +2,7 @@
 name = "possibilistic-portfolio-optimisation-py"
 version = "0.1.0"
 description = "Possibilistic portfolio optimisation in Python"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 
 # runtime deps
 dependencies = [

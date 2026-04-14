@@ -393,11 +393,11 @@ if __name__ == "__main__":
     END = None
 
     # --- Simulation parameters ---
-    SIM_T = 6000
-    SIM_N_ASSETS = 5
+    SIM_T = 10000
+    SIM_N_ASSETS = 10
     SIM_SEED = 42
     # Set REGENERATE = True to overwrite existing simulated CSVs
-    REGENERATE = False
+    REGENERATE = True
 
     # Generate simulated CSVs if missing (or forced)
     missing = any(
