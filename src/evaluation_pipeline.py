@@ -52,7 +52,7 @@ _ROLLING_WINDOW = 252
 _SCALING_FACTOR = 1
 
 
-# ── 1. I/O helpers ────────────────────────────────────────────────────────────
+# ── 1. I/O helpers ─────────────────
 
 
 def load_returns(folder: Path | str) -> pd.DataFrame:
@@ -167,7 +167,9 @@ def compute_scalar_metrics(
         results["avg_log_likelihood"] = float("nan")
         results["avg_mahalanobis"] = float("nan")
 
-    results["avg_turnover"] = average_turnover(weights_df, scaling_factor=_SCALING_FACTOR)
+    results["avg_turnover"] = average_turnover(
+        weights_df, scaling_factor=_SCALING_FACTOR
+    )
 
     return results
 
@@ -334,7 +336,6 @@ def save_evaluation_results(
     }
     if mah:
         pd.DataFrame(mah).to_csv(folder / "mahalanobis.csv")
-
 
 
 # ── 5. End-to-end entry point ─────────────────────────────────────────────────

@@ -570,6 +570,7 @@ def main2():
         rolling_window_long=252,
         rolling_window_short=63,
         device="cuda",
+        output_dir=Path(__file__).resolve().parent.parent / "results",
     )
 
 
@@ -630,6 +631,7 @@ def main():
         rolling_window_long=rolling_window_long,
         rolling_window_short=rolling_window_short,
         device="cuda",
+        output_dir=Path(__file__).resolve().parent.parent / "results",
     )
 
 
