@@ -1,196 +1,94 @@
-# Possibilistic Portfolio Optimisation in Python
+# Possibilistic Portfolio Optimisation
+
+Repository for the final year project on possibilistic portfolio optimisation in Python.
+
+---
 
 ## Overview
 
-This project studies portfolio construction under **estimation uncertainty** and implements both **probabilistic (Bayesian)** and **possibilistic model-averaging frameworks**.
+Standard Bayesian model averaging (BMA) treats uncertainty over *which model is correct* the same way it treats uncertainty over *returns* — as a probability. This project tries to change that by using possibility theory to quantify knowledge based uncertainty. While portfolio returns are genuinely random, our ignorance of the best model is not a matter of chance: it reflects a state of knowledge, not a frequency. Possibility theory provides a cleaner language for that kind of uncertainty.
 
-### Motivation
+The project implements a possibilistic analogue of BMA over Normal-Inverse-Wishart (NIW) model pools. The key change is replacing the probabilistic normalisation constant (a sum / integral) with a supremum, yielding possibility distributions instead of probability distributions. Three necessity-based weighting schemes (masked, power, exponential) then convert possibility scores into portfolio weights via geometric aggregation. The possibilistic approach is evaluated against BMA and a set of classical benchmarks across 20 Kenneth French daily return datasets.
 
-Standard Bayesian model averaging approaches can exhibit instability and performance decay under rolling estimation. This repository introduces a **possibilistic analogue using supremum normalization** and compares it empirically against classical and shrinkage-based portfolio strategies.
+---
 
-### Key Contributions
+## Getting started
 
-- Dynamic Bayesian model averaging over NIW-updated models with pruning
-- Possibilistic analogue replacing probability normalization with supremum-based normalization
-- Hybrid necessity estimation (Monte Carlo + deterministic optimization)
-- Benchmark comparison against classical (Markowitz, 1/N) and shrinkage-based methods (Jorion, Kan-Zhou)
+### 1. Environment
 
-### Pipeline
-
-1. Load and clean return data  
-2. Estimate next-period means and covariances  
-3. Convert moments into portfolio weights  
-4. Evaluate performance (Sharpe, certainty equivalent, distributional scores)
-
-## What The Project Implements
-
-### Portfolio rules and benchmarks
-
-`alternative_investment_rules.py` implements:
-
-- `equal_weight_strategy`: 1/N allocation
-- `market_weight_strategy`: market-only allocation using the `Mkt-RF` column
-- `historical_expectations_weights`: expanding-window sample means and covariances followed by Markowitz
-- `rolling_window_weights`: rolling-window sample means and covariances followed by Markowitz
-- `minimum_variance_strategy`: minimum-variance portfolio
-- `jorion_bayes_stein_estimates` and `jorion_bayes_stein_strategy`: Jorion Bayes-Stein shrinkage
-- `kan_zhou_three_fund_estimates` and `kan_zhou_three_fund_strategy`: Kan-Zhou three-fund shrinkage
-
-### Bayesian averaging
-
-`bayesian_averaging.py` implements a dynamic Bayesian model averaging procedure over many candidate NIW-updated models. It:
-
-- creates a new "newborn" model each period
-- updates model probabilities using a marginal likelihood
-- prunes low-probability models to control runtime
-- aggregates model-specific moments into a single predictive mean and covariance
-
-This is the probabilistic version of the model-combination engine and is the closest module to the Anderson-Cheng-style setup. The implementation also adds **pruning**, which is important because the raw procedure grows quickly with o(T**2) complexity with time.
-
-### Possibilistic Bayesian averaging
-
-`possibilistic_bayesian.py` implements the **possibility-theoretic analogue** of the Bayesian averaging logic. Relative to the probabilistic version, it:
-
-- replaces posterior probability integral based normalization with **supremum normalization**
-- avoids prior probability specification in the same sense as the probabilistic weighting step, keeping the new model more "uninformative"
-- keeps NIW-style parameter updates
-- aggregates surviving models into a possibilistic predictive mean and covariance through geometric aggregration.
-
-### Necessity calculations
-
-Two files address necessity-style weighting for possibilistic models:
-
-- `necessity_calculation.py`: a **naive Monte Carlo** approximation of model necessity / the deminternal validity
-- `necessity_deterministically.py`: a more **deterministic hybrid** approach using analytic starts, optional Monte Carlo seeds, and local optimization
-
-### Evaluation
-
-`sharpe_ratio.py` computes:
-
-- realized portfolio returns
-- overall Sharpe ratio
-- rolling Sharpe ratio
-- certainty equivalent
-
-with formulas expressed below.
-
-### Data and simulation
-
-- `data_input.py` dynamically loads and cleans data from Kenneth French style CSV files
-- `simulated_datasets.py` provides two synthetic datasets: an i.i.d. factor DGP and a regime-shifting factor-mean DGP
-
-## Results (Summary)
-
-- Bayesian averaging exhibits rolling Sharpe decay over long horizons
-- Possibilistic aggregation retains model influence longer but may introduce persistence effects
-- Classical benchmarks (1/N, minimum variance) remain competitive under estimation error
-- Model pruning is necessary to control computational growth without degrading performance materially
-
-## Mathematical Conventions
-
-### Markowitz weights
-
-For predicted mean vector `\mu_t` and covariance matrix `\Sigma_t`, the unconstrained Markowitz rule used here is:
-
-w_t = (1 / θ) Σ_t^{-1} μ_t
-
-where `\theta` is the risk-aversion parameter.
-
-### Portfolio return timing
-
-The repository generally assumes:
-
-w_t is applied to r_{t+1}
-
-This lagging convention appears in the weight generation and evaluation code.
-
-### Sharpe ratio
-
-The daily Sharpe ratio is:
-
-Sharpe = E[R_p] / sqrt(Var(R_p))
-
-and if annualized with scaling factor `K`:
-
-Sharpe_annual = Sharpe_daily * sqrt(K)
-
-### Rolling Sharpe ratio
-
-For a rolling window `W`, the rolling Sharpe at time `t` is:
-
-RollingSharpe_t = mean(R_{p,t-W+1:t}) / std(R_{p,t-W+1:t})
-
-with the same optional `\sqrt{K}` annualization.
-
-### Certainty equivalent
-
-The certainty equivalent used in `sharpe_ratio.py` is the mean-variance approximation:
-
-CE = E[R_p] + E[R_f] - (θ/2) Var(R_p)
-
-When `include_rf_in_mean=False`, the `\mathbb{E}[R_f]` term is omitted.
-
-## Getting Started
-
-### Requirements
-
-- Python `3.11+`
-- one of:
-  - `uv` for environment management
-  - standard `venv` plus `pip`
-
-### Install with `uv`
-
-From the repository root:
+Dependencies are declared in `pyproject.toml`. Install with `uv`:
 
 ```bash
-cd possibilistic-portfolio-optimisation-py
 uv sync
 ```
 
-This installs the dependencies declared in [`pyproject.toml`](possibilistic-portfolio-optimisation-py/pyproject.toml).
+**PyTorch (strongly recommended):** The necessity computation in `faster_necessity.py` benefits substantially from GPU acceleration. Install PyTorch separately, matching your CUDA version, by following the instructions at [pytorch.org/get-started](https://pytorch.org/get-started/locally/). Without it the code falls back to CPU via `joblib`.
 
-### Install with `venv`
+### 2. Datasets
+
+Download the daily return files you want from the [Kenneth French Data Library](https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html) and place them in the `datasets/` directory alongside `F-F_Research_Data_Factors_daily.csv` (also from the same library — needed for the risk-free rate). Note that `datasets/` is not inside this repository — it sits as a sibling folder alongside the cloned repo in your local project directory.
+
+### 3. Configure and run the pipeline
+
+Open `src/pipeline_wrapper.py` and edit the `main()` function at the bottom:
+
+- Point `portfolios_paths` to the CSV files you downloaded.
+- Set `output_dir` to wherever you want results saved.
+
+Then run:
 
 ```bash
-cd possibilistic-portfolio-optimisation-py
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install ipykernel matplotlib mpmath mypy numpy pandas pandas-stubs scipy
+uv run src/pipeline_wrapper.py
 ```
 
-### `possibilistic-portfolio-optimisation-py/src/`
+This produces one output folder per dataset (e.g. `results/10_Industry_Portfolios_Daily_value_weighted/`) containing portfolio weights, predictive moments, and a copy of the returns series.
 
-- [`alternative_investment_rules.py`](src/alternative_investment_rules.py): benchmark and shrinkage-based portfolio rules
-- [`bayesian_averaging.py`](src/bayesian_averaging.py): probabilistic dynamic Bayesian averaging engine
-- [`data_input.py`](src/data_input.py): loaders and cleaning utilities for Kenneth French style data
-- [`distribution_evaluation_func.py`](src/distribution_evaluation_func.py): predictive-distribution evaluation helpers
-- [`markowitz.py`](src/markowitz.py): unconstrained Markowitz weight computation
-- [`necessity_calculation.py`](src/necessity_calculation.py): Monte Carlo necessity approximation
-- [`necessity_deterministically.py`](src/necessity_deterministically.py): deterministic / hybrid necessity approximation and weighting schemes
-- [`possibilistic_bayesian.py`](src/possibilistic_bayesian.py): possibilistic dynamic model averaging engine
-- [`prior_selection.py`](src/prior_selection.py): prior-sharing helper for Bayesian averaging
-- [`sharpe_ratio.py`](src/sharpe_ratio.py): realized-return and utility metrics
-- [`simulated_datasets.py`](src/simulated_datasets.py): simulated datasets and DGP helpers
-- [`analysis.ipynb`](src/analysis.ipynb): main exploratory notebook for generating results and comparing methods
-- [`testing_data_input.ipynb`](src/testing_data_input.ipynb): notebook used to test and inspect the data loading utilities
-- [`file.pkl`](src/file.pkl): serialized experiment artifact; the codebase does not document its schema directly
+### 4. Evaluate
 
-### `datasets/`
+```bash
+uv run src/evaluation_pipeline.py
+```
 
-The Datasets have been sourced from Kenneth-French Fama factor models library, as well as the CRSP database.
+This reads every output folder, computes Sharpe ratios, certainty equivalents, log-likelihoods, and Mahalanobis distances, and writes summary CSVs back into each folder.
 
-## Notes And Caveats
+### 5. Visualise
 
-- The project is currently organized more like a research codebase than a packaged library.
-- The Bayesian and possibilistic model-combination algorithms can be computationally expensive because the active model set grows over time; both files therefore include pruning support.
+Open `analysis.ipynb` and point `RESULTS_DIR` to your results folder. Run top to bottom. This notebook is also the **best entry point** if you just want to inspect results without re-running the pipeline — it covers a theoretical overview, predictive performance, and portfolio outcomes end to end.
 
-## Suggested Entry Points
+---
 
-If you are new to the repository, the best starting points are:
+## Codebase
 
-1. [`data_input.py`](src/data_input.py) to understand the data schema.
-2. [`analysis.ipynb`](src/analysis.ipynb) to see how the modules are composed.
-3. [`bayesian_averaging.py`](src/bayesian_averaging.py) for the probabilistic baseline.
-4. [`possibilistic_bayesian.py`](src/possibilistic_bayesian.py) for the main novel contribution.
-5. [`sharpe_ratio.py`](src/sharpe_ratio.py) and [`distribution_evaluation_func.py`](src/distribution_evaluation_func.py) for evaluation.
+### Core algorithms
+
+| File | Role |
+|---|---|
+| `possibilistic_bayesian.py` | Main possibilistic model-averaging engine — supremum normalisation, NIW updates, geometric aggregation |
+| `faster_necessity.py` | Parallelised necessity score computation (joblib + optional GPU) — the computationally heavy step |
+| `bayesian_averaging.py` | Probabilistic BMA baseline — same NIW pool structure, sum normalisation |
+
+### Benchmarks and helpers
+
+| File | Role |
+|---|---|
+| `alternative_investment_rules.py` | 1/N, market, min-variance, historical expanding, rolling window, jorion-bayes stein, kan-zhou 3 fund rule |
+| `markowitz.py` | Converts predictive moments into unconstrained or long-only Markowitz weights |
+| `portfolio_evaluation_functions.py` | Sharpe, rolling Sharpe, portfolio returns, certainty equivalent |
+| `distribution_evaluation_functions.py` | Log-likelihood and Mahalanobis distance under NIW Student-*t* predictive |
+| `predictive_diagnostics.ipynb` | Exploratory file for result synthesis |
+
+### Pipeline
+
+| File | Role |
+|---|---|
+| `pipeline_wrapper.py` | Top-level orchestration — runs all algorithms across all datasets, saves outputs |
+| `evaluation_pipeline.py` | Loads saved outputs, computes all performance metrics, writes summary CSVs |
+| `data_input.py` | Kenneth French CSV loading, excess-return construction, date slicing |
+
+---
+
+## Notes
+
+- A full possibilistic run over ~12 000 trading days takes roughly 90 minutes per dataset. The main controls are `max_models` (pruning) and `merge_threshold` / `nu_bandwidth` (merging).
+- `pipeline_wrapper.py` and `evaluation_pipeline.py` are designed to be run in sequence; the evaluation step expects the folder structure that the pipeline step produces.
+-Import paths assume you run scripts from the `dev/` root.
