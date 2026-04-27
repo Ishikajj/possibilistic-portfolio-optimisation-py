@@ -10,9 +10,8 @@ from data_input import (
 )
 
 
-# ── Helper 1: test single dataset pipeline ─────────────────────────────
 def test_calculate_all_functions():
-    """Minimal  test for calculate_all_functions_perdatasets."""
+    """Minimal test for calculate_all_functions_perdatasets."""
 
     path_dataset = Path("../datasets/10_Industry_Portfolios_Daily.csv")
     path_rf = Path("../datasets/F-F_Research_Data_Factors_daily.csv")
@@ -35,9 +34,8 @@ def test_calculate_all_functions():
     print("Single dataset test complete:", folder)
 
 
-# ── Helper 2: test full multi-dataset pipeline ─────────────────────────
 def test_call_all_datasets():
-    """Minimal smoke test for call_all_datasets."""
+    """Minimal test for call_all_datasets."""
 
     datasets = [
         Path("../datasets/10_Industry_Portfolios_Daily.csv"),

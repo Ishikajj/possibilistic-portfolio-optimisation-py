@@ -1,41 +1,42 @@
+"""Benchmark and classical portfolio strategies for comparison against Bayesian/possibilistic methods.
+
+Seven strategies split into two groups:
+
+Weights only (pd.DataFrame):
+  equal_weight_strategy          — 1/N uniform allocation
+  market_weight_strategy         — full weight on the market column, zero elsewhere
+  minimum_variance_strategy      — rolling sample covariance inversion, no mean input
+
+Predictive moments + weights (tuple[mu_sigma_dict, pd.DataFrame]):
+  historical_expectations_weights — expanding-window sample mean/covariance → Markowitz
+  rolling_window_weights          — fixed rolling window → Markowitz
+  jorion_bayes_stein_strategy     — Jorion (1986) shrinkage toward min-variance mean
+  kan_zhou_three_fund_strategy    — Kan & Zhou (2007) three-fund rule with incomplete-beta shrinkage
+
+All functions accept burn_in and periods_until_investment; weights are NaN before
+burn_in + periods_until_investment and on the last row (weights at t apply to returns at t+1).
+mu_sigma_dict keys: "mu_hat" (T, n), "sigma_hat" (T, n, n), aligned to returns_df.index.
+"""
+
 import numpy as np
 import pandas as pd
 from markowitz import markowitz_unconstrained
 from typing import Optional
 
-"""only 3 functions here: 1/n, market weights and minimum variance strategy here returns only the weights invested. rest returns the predictives as well as the weights invested."""
-
-# all functions below already return weight dataframes.
-# this means we can directly implement portfolio returns > all dem thangs.
-try:
-    # Preferred: fast special functions
-    from scipy.special import (
-        betainc as _betainc,
-    )  # regularized incomplete beta I_x(a,b)
-    from scipy.special import beta as _beta  # Beta(a,b)
-except Exception:  # pragma: no cover
-    _betainc = None
-    _beta = None
-    try:
-        import mpmath as _mp  # fallback (slower)
-    except Exception as e:  # pragma: no cover
-        _mp = None
-        _mp_import_error = e
+from scipy.special import (
+    betainc as _betainc,
+)  # regularized incomplete beta I_x(a,b)
+from scipy.special import beta as _beta  # Beta(a,b)
 
 
 def _incomplete_beta_unregularized(a: float, b: float, x: float) -> float:
-    """Return unregularized incomplete beta B_x(a,b) = \int_0^x t^{a-1} (1-t)^{b-1} dt."""
+    """Return unregularized incomp2lete beta B_x(a,b) = \int_0^x t^{a-1} (1-t)^{b-1} dt."""
     if not (0.0 <= x <= 1.0) or not np.isfinite(x):
         return float("nan")
 
     if _betainc is not None and _beta is not None:
         # B_x(a,b) = I_x(a,b) * B(a,b)
         return float(_betainc(a, b, x) * _beta(a, b))
-
-    # mpmath fallback (unregularized directly)
-    if _mp is None:  # pragma: no cover
-        raise ImportError("Need scipy or mpmath installed to compute incomplete beta.")
-    return float(_mp.betainc(a, b, 0.0, x, regularized=False))
 
 
 def _solve_or_pinv(A: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -61,7 +62,11 @@ def _minvar_mean_target(
     invSig_1 = _solve_or_pinv(Sigma_t, ones)
     denom_1 = float(ones @ invSig_1)
     if denom_1 == 0.0 or not np.isfinite(denom_1):
-        return float("nan"), np.full_like(ones, np.nan, dtype=float), float("nan")
+        return (
+            float("nan"),
+            np.full_like(ones, np.nan, dtype=float),
+            float("nan"),
+        )
     mu_g_scalar = float(mu_t @ invSig_1) / denom_1
     mu_g_vec = mu_g_scalar * ones
     return mu_g_scalar, mu_g_vec, denom_1
@@ -151,7 +156,9 @@ def market_weight_strategy(
 
     weights = np.full((T, n), np.nan)
     if market_col not in returns_df.columns:
-        raise KeyError(f"Market column '{market_col}' not found in returns DataFrame.")
+        raise KeyError(
+            f"Market column '{market_col}' not found in returns DataFrame."
+        )
 
     start = burn_in + periods_until_investment
     end = T - 1  # last row excluded
@@ -243,7 +250,9 @@ def jorion_bayes_stein_estimates(
         cov_ddof1 = ret_window.cov(ddof=1).values
         Sigma_t = cov_ddof1 * (w - 1) / c
 
-        mu_g_scalar, mu_g_vec, denom_1 = _minvar_mean_target(mu_t, Sigma_t, ones)
+        mu_g_scalar, mu_g_vec, denom_1 = _minvar_mean_target(
+            mu_t, Sigma_t, ones
+        )
         if not np.isfinite(mu_g_scalar) or not np.isfinite(denom_1):
             continue
         mu_g_scalar_arr[t] = mu_g_scalar
@@ -351,7 +360,9 @@ def kan_zhou_three_fund_estimates(
         # MLE covariance (c=w)
         Sigma_t = ret_window.cov(ddof=0).values
 
-        mu_g_scalar, mu_g_vec, _denom_1 = _minvar_mean_target(mu_t, Sigma_t, ones)
+        mu_g_scalar, mu_g_vec, _denom_1 = _minvar_mean_target(
+            mu_t, Sigma_t, ones
+        )
         if not np.isfinite(mu_g_scalar):
             continue
 
@@ -399,7 +410,7 @@ def kan_zhou_three_fund_strategy(
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
     """Kan and Zhou (2007) three-fund rule.
 
-    Implements Section 6.7 (as shown in your screenshot):
+    Implements Section 6.7:
       - mu_t is rolling sample mean over a window of size w
       - Sigma_t uses the MLE covariance with c=w (i.e. divide by w)
       - mu_g is the constant-vector target from the minimum-variance portfolio mean

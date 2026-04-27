@@ -1,3 +1,12 @@
+"""Naive Monte Carlo sampling approach to necessity score computation. Not used in the main pipeline.
+
+Abandoned because MC sampling cannot be made dense enough in high dimensions —
+required sample size grows exponentially with n, causing necessity scores to be
+systematically underestimated.
+
+This is especially true because we are not calculating an expectation, but an extremum.
+"""
+
 from __future__ import annotations
 
 import numpy as np
@@ -5,7 +14,9 @@ from numpy.linalg import LinAlgError, slogdet
 from scipy.stats import invwishart
 
 
-def _log_normal_likelihood(y: np.ndarray, mu: np.ndarray, Sigma: np.ndarray) -> float:
+def _log_normal_likelihood(
+    y: np.ndarray, mu: np.ndarray, Sigma: np.ndarray
+) -> float:
     """Log multivariate normal likelihood of y given (mu, Sigma)."""
     n = len(y)
     Sigma = 0.5 * (Sigma + Sigma.T)
@@ -82,7 +93,9 @@ def _sample_probabilistic_niw(
             f"nu must satisfy nu > n - 1 for inverse-Wishart sampling; got nu={nu}, n={n}."
         )
 
-    Sigmas = invwishart.rvs(df=nu, scale=Lambda, size=n_samples, random_state=rng)
+    Sigmas = invwishart.rvs(
+        df=nu, scale=Lambda, size=n_samples, random_state=rng
+    )
     if n_samples == 1:
         Sigmas = Sigmas[np.newaxis, :, :]
 
@@ -112,15 +125,22 @@ def _raw_internal_validity_score(
     over NIW Monte Carlo draws. Both h_bar and f_bar are normalized to have sample
     supremum one.
     """
-    mus, Sigmas = _sample_probabilistic_niw(mu0, kappa, Lambda, nu, n_samples, rng)
+    mus, Sigmas = _sample_probabilistic_niw(
+        mu0, kappa, Lambda, nu, n_samples, rng
+    )
 
     log_h = np.array(
-        [_log_normal_likelihood(y_next, mus[s], Sigmas[s]) for s in range(n_samples)],
+        [
+            _log_normal_likelihood(y_next, mus[s], Sigmas[s])
+            for s in range(n_samples)
+        ],
         dtype=float,
     )
     log_f = np.array(
         [
-            _log_possibilistic_niw_kernel(mus[s], Sigmas[s], mu0, kappa, Lambda, nu)
+            _log_possibilistic_niw_kernel(
+                mus[s], Sigmas[s], mu0, kappa, Lambda, nu
+            )
             for s in range(n_samples)
         ],
         dtype=float,
@@ -223,7 +243,9 @@ def necessity_weighted_possibilities(
     )
 
     if len(necessities) != len(possibilities):
-        raise ValueError("necessities and possibilities must have the same length.")
+        raise ValueError(
+            "necessities and possibilities must have the same length."
+        )
 
     adjusted = necessities * possibilities
     max_adjusted = adjusted.max(initial=0.0)

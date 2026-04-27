@@ -1,24 +1,26 @@
-"""
-Data input utilities for the Robust Bayesian Portfolio Choices replication.
+"""Data loading and preparation for Kenneth French portfolio returns.
 
-Conventions:
-- Source CSVs often report returns in PERCENT units (e.g., 1.0 means 1%).
-  We convert returns to DECIMALS (divide by 100).
-- We keep a datetime `Date` column for slicing.
-- We also provide `time_index_to_integer()` to convert a Date-indexed frame to
-  integer time indexing while preserving the Date in a column.
+Two functions form the public API:
 
-  Note that before 1953 there were about 300 trading days per year. we choose to focus our performance strictly post 1963 as per the paper.
+load_excess_returns_from_kenneth_french_path(portfolios_path, risk_free_path, ...)
+    Loads a Kenneth French CSV, extracts the requested return block (value- or
+    equal-weighted), subtracts the risk-free rate, and slices by date. Returns a
+    DataFrame that still carries Date, RF, and Mkt-RF columns alongside the asset
+    returns — useful for any downstream step that needs date alignment or the RF series.
+
+prepare_returns(df, drop_cols=("Date", "RF"))
+    Strips non-numeric metadata columns from the output of the above, leaving a clean
+    numeric-only DataFrame ready to pass to the algorithms. Kept separate so callers
+    can inspect or slice the dated DataFrame before discarding the metadata.
+
+All returns are stored in decimal units (percent / 100).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 from io import StringIO
-import numpy as np
 import pandas as pd
-import numpy as np
 
 # Paths (relative to this file)
 DATA_PATH = (
@@ -32,7 +34,6 @@ RISK_FREE_RATE_PATH = (
 )
 
 
-# works, tested.
 def _parse_yyyymmdd_to_datetime(s: pd.Series) -> pd.Series:
     """Parse dates like 19260701 (YYYYMMDD) to datetime."""
     ss = s.astype(str).str.replace(r"\.0$", "", regex=True)
@@ -42,7 +43,6 @@ def _parse_yyyymmdd_to_datetime(s: pd.Series) -> pd.Series:
     return pd.to_datetime(ss, errors="coerce")
 
 
-# tested, works.
 def _read_csv_block_between_markers(
     path: Path,
     start_marker: str,
@@ -112,7 +112,7 @@ def load_kenneth_french_portfolios(
     """
     p = path or DATA_PATH
 
-    # Ken French-style files may contain multiple tables; extract the requested block if present.
+    # extract the requested block if present.
     try:
         if end_marker is not None:
             df = _read_csv_block_between_markers(
@@ -167,7 +167,6 @@ def load_kenneth_french_portfolios(
     return df
 
 
-# works, tested.
 def load_risk_free_rate(path: Path | None = None) -> pd.DataFrame:
     """Load the risk-free rate (RF) and return a DataFrame with a datetime Date column.
 
@@ -203,7 +202,6 @@ def load_risk_free_rate(path: Path | None = None) -> pd.DataFrame:
     return df
 
 
-# works, tested.
 def calculate_excess_returns(
     portfolios_df: pd.DataFrame, risk_free_rate_df: pd.DataFrame
 ) -> pd.DataFrame:

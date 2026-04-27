@@ -1,100 +1,47 @@
-"""
-this file is doing something unconventional known as the possibilistic analog
-takes the data frame from data input
+"""Possibilistic Bayesian model averaging over Normal-Inverse-Wishart (NIW) models.
 
+Replaces the probabilistic normalisation constant (sum) with a supremum, producing
+possibility distributions instead of probability distributions. At each time step a
+new NIW model is born, all models are updated via the conjugate NIW update, and
+possibilities are reweighted using the possibilistic Bayes rule. Three necessity-based
+weighting schemes (masked, power, exponential) are applied on top of the raw possibilities
+to produce three sets of predictive moments, each passed to Markowitz for portfolio weights.
 
-for each asset, creates it into a separate dataframe with the following properties:
-mean (from t = 0 to ti), variance(from t = 0 to ti), and delta, k, scale, degrees of freedom,
-inferred optimal time window using a normal inverse wishart distribution of the possibilistic form
+Algorithm (per time step t):
+1. Birth     — spawn a new NIW model with prior set to cross-asset historical moments
+2. Observe   — receive realised return vector R_t
+3. Score     — compute necessity scores for all models given R_t
+4. Reweight  — update possibilities via possibilistic Bayes rule (supremum normalisation)
+5. Update    — apply conjugate NIW update to every model
+6. Aggregate — form predictive (mu, Sigma) under each of three necessity weighting schemes
+7. Prune     — keep top max_models by possibility
+8. Merge     — merge similar models by Hellinger distance to reduce redundancy
 
-we have a burn in period of 100 days where we form a very weak (the average of averages priors with possibility one)
-
-now, for each point of time, we determine a series of "models": each defined by the mean, variance, delta
+Entry point: run_core(returns_df, ...) — returns (diag_df, masked_pred, masked_weights,
+power_pred, power_weights, exp_pred, exp_weights).
 """
 
 from __future__ import annotations
+
+import warnings
+
 import numpy as np
 import pandas as pd
 from numpy.linalg import slogdet
+
 from data_input import (
     load_excess_returns_from_kenneth_french_path,
     prepare_returns,
 )
 from faster_necessity import (
     deterministic_mask_weighting,
-    power_weighting,
     exponential_penalty_weighting,
+    necessity_scores_fast,
+    power_weighting,
 )
-import warnings
-from faster_necessity import necessity_scores_fast
 from markowitz import markowitz_unconstrained
 
-# TODO: main problem is the T^2n^3 complexity of the algorithm, where t is the time steps and n is assets
-# the n^3 remains fixed as the number of assets = 11
-# but T grows monsterly: we have about 70 years of data of 250 trading days each
-# this becomes bad quick
-# Update: 1963-2011, T = 12000 took about 40 minutes.
 
-"""step 1
--> create a new model with mean  = common mean across all previous days and assets,
- similarly create new delta and k using the +1 update rule.
- the possibility of this new model is 1.
-
-step 2
--> observe returns for the new day
-
-step 3
--> using the returns, calculate the updated means and covariances using the formula given.
-
-step 4
--> using the likelihood function defined over the supremum, calculate the updated possibilities of each model. this will require the previous convariance, new covariance, previous delta, new delta, previous k, new k, previous v, new v
-
-step 5
--> discard the old (sigma, delta ( v - n - 1), k, mean)
-
-step 6
--> use these updated model possibilities and the updated model variances and means to calculate intersection possibility, as written in the paper. then normalise it using supremum. this would likely have some proportionality to the niw.
-
-step 7
--> get the mean of this model as the intersection mean and the intersection covariance, as the mode.
-
-step 7
--> do steps 1-7 until you reach the end of time
-
-short note:
-
-Weights calculation:
-the integer indexed series of bayesian averaged mean and covariances is used to calculate the markowitz weights using a separate function.
-
-this function will return a integer indexed series of weights of each assets.
-
-Portfolio return determination:
-using the weights and the returns series that we get, we can run these to calculate the sharpe and certainty equivalents each day.
-
-for each model, we have its mean, covariance, degrees of freedom k and v, and its probability. as time goes on, the number of models increases. step 1.1 indicates the models of t according to the information available at time t-1
-
-okay so each model uses the probability as a scalar, meaning we can not have different windows across different assets even though that might be a better predictor of mean.
-this is due to having a common covariance matrix across all assets, even if means differ."""
-
-
-"""data input is
-NoDur           float64
-Durbl           float64
-Manuf           float64
-Enrgy           float64
-Chems           float64
-BusEq           float64
-Telcm           float64
-Utils           float64
-Shops           float64
-Hlth            float64
-Money           float64
-Other           float64
-time           datetime64[ns]
-"""
-
-
-# corrrect
 def _new_model_prior(
     sum_R: np.ndarray, sum_R2: np.ndarray, t: int
 ) -> tuple[float, float]:
@@ -113,7 +60,7 @@ def _new_model_prior(
         return 0.0, 1e-4
 
     mu_vec = sum_R / float(t)
-    mu_bar = float(mu_vec.mean())  # common initial mean across all assets.
+    mu_bar = float(mu_vec.mean())
 
     if t <= 1:
         return mu_bar, 1e-4
@@ -123,7 +70,6 @@ def _new_model_prior(
     return mu_bar, float(var_vec.mean())
 
 
-# correct
 def _append_new_model(
     mus: list[np.ndarray],
     kappas: list[float],
@@ -183,7 +129,6 @@ def _log_marginal_likelihood(
     )
 
 
-# correct
 def _update_possibilities(
     R_t: np.ndarray,
     mus: list[np.ndarray],
@@ -275,6 +220,9 @@ def _sigma_mode(Lambda: np.ndarray, nu: float, n: int) -> np.ndarray:
     return Lambda / nu
 
 
+###################
+####MODEL MANAGEMENT FUNCTIONS
+###################
 def _prune_models(
     mus: list[np.ndarray],
     kappas: list[float],
@@ -427,6 +375,9 @@ def _gaussian_mahalanobis_distance(
     """Mahalanobis distance between two Gaussian means using pooled covariance.
 
     d = sqrt((mu1 - mu2)^T * ((Sigma1 + Sigma2) / 2)^{-1} * (mu1 - mu2))
+
+    Merging of 2 models was earlier based on mahalnobis distance -
+    but this was switched in favour of hellinger which compares distributions directly
     """
     eps = 1e-10
     n = Sigma1.shape[0]
@@ -441,127 +392,16 @@ def _gaussian_mahalanobis_distance(
     return float(np.sqrt(max(quad, 0.0)))
 
 
-def _merge_models(
+def _merge_models_core(
     mus: list[np.ndarray],
     kappas: list[float],
     Lambdas: list[np.ndarray],
     nus: list[float],
     possibilities: np.ndarray,
-    merge_threshold: float = 0.1,
-    nu_bandwidth: int = 50,
-    k_neighbours: int = 5,
-) -> tuple[
-    list[np.ndarray], list[float], list[np.ndarray], list[float], np.ndarray, float
-]:
-    """Merge genuinely redundant model pairs using Gaussian Hellinger distance.
-
-    Two models are candidates for merging only if:
-      1. |nu_i - nu_j| <= nu_bandwidth  — similar window length
-      2. Hellinger distance between Gaussian summaries is < merge_threshold
-
-    Each model is summarised by:
-        N(mu_i, Sigma_i),  where Sigma_i = Lambda_i / nu_i
-
-    Search strategy: sort models by nu, then for each model scan only its
-    k_neighbours forward neighbours — each pair is checked exactly once,
-    no double-counting. Complexity: O(N * k) per pass.
-
-    Merges are applied greedily: find the most similar qualifying pair, merge
-    it, repeat until no qualifying pairs remain.
-    """
-    if len(mus) < 2:
-        return mus, kappas, Lambdas, nus, possibilities, np.nan
-
-    n = len(mus[0])
-    poss_arr = np.array(possibilities, dtype=float, copy=True)
-
-    h_sum = 0.0
-    w_sum = 0.0
-
-    while True:
-        n_models = len(mus)
-        if n_models < 2:
-            break
-
-        nu_arr = np.array(nus, dtype=float)
-        order = np.argsort(nu_arr)
-        poss_norm = poss_arr / (poss_arr.sum() + 1e-300)
-
-        best_dist = np.inf
-        best_i = best_j = -1
-        h_sum = 0.0
-        w_sum = 0.0
-
-        for rank in range(n_models):
-            i = int(order[rank])
-            Sigma_i = Lambdas[i] / nu_arr[i]
-
-            for fwd in range(1, k_neighbours + 1):
-                if rank + fwd >= n_models:
-                    break
-                j = int(order[rank + fwd])
-
-                # Gate 1: nu proximity
-                if abs(nu_arr[i] - nu_arr[j]) > nu_bandwidth:
-                    break
-
-                # Gate 2: Hellinger distance between Gaussian summaries
-                Sigma_j = Lambdas[j] / nu_arr[j]
-                hdist = _gaussian_hellinger_distance(
-                    mus[i], Sigma_i, mus[j], Sigma_j
-                )
-
-                w = poss_norm[i] * poss_norm[j]
-                h_sum += w * hdist
-                w_sum += w
-
-                if hdist < merge_threshold and hdist < best_dist:
-                    best_dist = hdist
-                    best_i, best_j = i, j
-
-        if best_i < 0:
-            break
-
-        mu_m, kappa_m, Lambda_m, nu_m, poss_m = _merge_two_models(
-            mus[best_i],
-            kappas[best_i],
-            Lambdas[best_i],
-            nus[best_i],
-            float(poss_arr[best_i]),
-            mus[best_j],
-            kappas[best_j],
-            Lambdas[best_j],
-            nus[best_j],
-            float(poss_arr[best_j]),
-            n,
-        )
-
-        keep = [k for k in range(n_models) if k != best_i and k != best_j]
-        mus = [mus[k] for k in keep] + [mu_m]
-        kappas = [kappas[k] for k in keep] + [kappa_m]
-        Lambdas = [Lambdas[k] for k in keep] + [Lambda_m]
-        nus = [nus[k] for k in keep] + [nu_m]
-        poss_arr = np.concatenate([poss_arr[keep], [poss_m]])
-
-    max_poss = float(poss_arr.max(initial=0.0))
-    if max_poss > 0.0:
-        poss_arr = poss_arr / max_poss
-    else:
-        poss_arr = np.ones(len(poss_arr), dtype=float)
-
-    hellinger_avg = h_sum / w_sum if w_sum > 0 else np.nan
-    return mus, kappas, Lambdas, nus, poss_arr, hellinger_avg
-
-
-def _merge_models_mahalanobis(
-    mus: list[np.ndarray],
-    kappas: list[float],
-    Lambdas: list[np.ndarray],
-    nus: list[float],
-    possibilities: np.ndarray,
-    merge_threshold: float = 1.0,
-    nu_bandwidth: int = 50,
-    k_neighbours: int = 5,
+    distance_fn,
+    merge_threshold: float,
+    nu_bandwidth: int,
+    k_neighbours: int,
 ) -> tuple[
     list[np.ndarray],
     list[float],
@@ -570,22 +410,23 @@ def _merge_models_mahalanobis(
     np.ndarray,
     float,
 ]:
-    """Merge redundant model pairs using Mahalanobis distance on Gaussian summaries.
+    """Merge redundant model pairs using a pluggable distance function.
 
     Two models are candidates for merging only if:
-      1. |nu_i - nu_j| <= nu_bandwidth
-      2. Mahalanobis distance between N(mu_i, Lambda_i/nu_i) and N(mu_j, Lambda_j/nu_j) < merge_threshold
+      1. |nu_i - nu_j| <= nu_bandwidth  — similar window length
+      2. distance_fn(mu_i, Sigma_i, mu_j, Sigma_j) < merge_threshold
 
-    Also accumulates the possibility-weighted average Mahalanobis distance
-    across neighbour pairs in the final (no-merge) scan, returned as mahalanobis_avg.
+    Each model is summarised by N(mu_i, Sigma_i) where Sigma_i = Lambda_i / nu_i.
+    Search: sort by nu, scan k_neighbours forward neighbours — O(N * k) per pass.
+    Merges are applied greedily until no qualifying pairs remain.
+    Returns the updated pool and the possibility-weighted average distance.
     """
     if len(mus) < 2:
         return mus, kappas, Lambdas, nus, possibilities, np.nan
 
     n = len(mus[0])
     poss_arr = np.array(possibilities, dtype=float, copy=True)
-
-    m_sum = 0.0
+    dist_sum = 0.0
     w_sum = 0.0
 
     while True:
@@ -599,7 +440,7 @@ def _merge_models_mahalanobis(
 
         best_dist = np.inf
         best_i = best_j = -1
-        m_sum = 0.0
+        dist_sum = 0.0
         w_sum = 0.0
 
         for rank in range(n_models):
@@ -615,16 +456,14 @@ def _merge_models_mahalanobis(
                     break
 
                 Sigma_j = Lambdas[j] / nu_arr[j]
-                mdist = _gaussian_mahalanobis_distance(
-                    mus[i], Sigma_i, mus[j], Sigma_j
-                )
+                dist = distance_fn(mus[i], Sigma_i, mus[j], Sigma_j)
 
                 w = poss_norm[i] * poss_norm[j]
-                m_sum += w * mdist
+                dist_sum += w * dist
                 w_sum += w
 
-                if mdist < merge_threshold and mdist < best_dist:
-                    best_dist = mdist
+                if dist < merge_threshold and dist < best_dist:
+                    best_dist = dist
                     best_i, best_j = i, j
 
         if best_i < 0:
@@ -652,13 +491,65 @@ def _merge_models_mahalanobis(
         poss_arr = np.concatenate([poss_arr[keep], [poss_m]])
 
     max_poss = float(poss_arr.max(initial=0.0))
-    if max_poss > 0.0:
-        poss_arr = poss_arr / max_poss
-    else:
-        poss_arr = np.ones(len(poss_arr), dtype=float)
+    poss_arr = (
+        poss_arr / max_poss
+        if max_poss > 0.0
+        else np.ones(len(poss_arr), dtype=float)
+    )
 
-    mahalanobis_avg = m_sum / w_sum if w_sum > 0 else np.nan
-    return mus, kappas, Lambdas, nus, poss_arr, mahalanobis_avg
+    dist_avg = dist_sum / w_sum if w_sum > 0 else np.nan
+    return mus, kappas, Lambdas, nus, poss_arr, dist_avg
+
+
+def _merge_models_hellinger(
+    mus,
+    kappas,
+    Lambdas,
+    nus,
+    possibilities,
+    merge_threshold: float = 0.1,
+    nu_bandwidth: int = 50,
+    k_neighbours: int = 5,
+):
+    """Merge redundant model pairs using Hellinger distance. See _merge_models_core."""
+    return _merge_models_core(
+        mus,
+        kappas,
+        Lambdas,
+        nus,
+        possibilities,
+        distance_fn=_gaussian_hellinger_distance,
+        merge_threshold=merge_threshold,
+        nu_bandwidth=nu_bandwidth,
+        k_neighbours=k_neighbours,
+    )
+
+
+def _merge_models_mahalanobis(
+    mus,
+    kappas,
+    Lambdas,
+    nus,
+    possibilities,
+    merge_threshold: float = 1.0,
+    nu_bandwidth: int = 50,
+    k_neighbours: int = 5,
+):
+    """Merge redundant model pairs using Mahalanobis distance. See _merge_models_core."""
+    return _merge_models_core(
+        mus,
+        kappas,
+        Lambdas,
+        nus,
+        possibilities,
+        distance_fn=_gaussian_mahalanobis_distance,
+        merge_threshold=merge_threshold,
+        nu_bandwidth=nu_bandwidth,
+        k_neighbours=k_neighbours,
+    )
+
+
+#########FINAL PREDICTIVE FORMATION
 
 
 def _aggregate_possibilistic_niw(
@@ -669,16 +560,20 @@ def _aggregate_possibilistic_niw(
     possibilities: np.ndarray,
     n: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Geometrically aggregate model-wise NIW possibility functions.
+    """Aggregate model-wise NIW possibility functions into a single predictive.
 
-    Uses the passed weights (derived from possibilities and/or necessity scores)
-    to compute a weighted NIW aggregate. Models with higher weight contribute more
-    to the aggregate mean and scatter matrix.
+    The possibilistic combination of M NIW kernels raised to weights w_m is itself
+    NIW-shaped (up to a proportionality constant). Combining natural parameters gives:
 
-    The product of NIW-shaped kernels remains NIW-shaped up to a proportionality
-    constant, so we combine natural parameters and return:
-    - aggregated mean location
-    - aggregated covariance mode Lambda / nu
+        kappa* = sum_m w_m * kappa_m
+        mu*    = (sum_m w_m * kappa_m * mu_m) / kappa*
+        Lambda* = sum_m w_m * (Lambda_m + kappa_m * mu_m mu_m') - kappa* * mu* mu*'
+        nu*    = sum_m w_m * nu_m
+
+    Predictive covariance is the mode of the aggregated possibilistic IW kernel:
+        Sigma* = Lambda* / nu*
+
+    Weights are derived from possibilities and/or necessity scores by the caller.
     """
     n_models = len(mus)
     if n_models == 0:
@@ -719,36 +614,6 @@ def _aggregate_possibilistic_niw(
     return mu_hat, Sigma_hat
 
 
-def smoke_test_run_core() -> tuple[pd.DataFrame, tuple]:
-    """Run a minimal smoke test of run_core on a short return sample."""
-    df = prepare_returns(
-        load_excess_returns_from_kenneth_french_path(start_date="2000-01-01")
-    )
-    df_small = df.iloc[:150].copy()
-
-    results = run_core(
-        df_small,
-        burn_in=20,
-        merge_threshold=0.15,
-        max_models=10,
-        keep_newest=True,
-        nu_bandwidth=20,
-        k_neighbours=3,
-        gamma=1.0,
-        eta=1.0,
-    )
-
-    diag_df = results[0]
-    if diag_df.empty:
-        raise RuntimeError(
-            "smoke_test_run_core produced an empty diagnostic DataFrame."
-        )
-
-    print("smoke_test_run_core passed")
-    print(diag_df.tail())
-    return diag_df, results
-
-
 def run_core(
     returns_df: pd.DataFrame,
     burn_in: int = 1000,
@@ -761,6 +626,7 @@ def run_core(
     gamma: float = 1.0,
     eta: float = 1.0,
     device: str = "cpu",
+    n_jobs: int = 6,
 ) -> tuple[
     pd.DataFrame,
     dict[str, np.ndarray],
@@ -770,16 +636,30 @@ def run_core(
     dict[str, np.ndarray],
     pd.DataFrame,
 ]:
-    """Run the possibilistic model averaging algorithm.
+    """Run the possibilistic NIW model averaging algorithm.
 
-    Implementation choices in this version:
-    - newborn model possibility is 1 before observing the new return
-    - model possibility update uses supremum normalization
-    - NIW parameters are updated exactly as in the probabilistic conjugate case
-    - geometric aggregation uses equal weights across models
-    - necessity-based reweighting is intentionally omitted for now
+    Args:
+        returns_df: (T, n) DataFrame of excess returns in decimals, numeric columns only.
+        burn_in: periods used to initialise sum_R / sum_R2 before model birth begins.
+        periods_until_investment: additional lag before Markowitz weights are non-NaN.
+        merge_threshold: Hellinger distance below which two models are merged.
+        max_models: maximum pool size after pruning each step.
+        keep_newest: if True, always retain the newborn model after pruning.
+        nu_bandwidth: max |nu_i - nu_j| for two models to be merge candidates.
+        k_neighbours: number of forward neighbours scanned per model during merging.
+        gamma: power exponent for power weighting scheme.
+        eta: decay rate for exponential penalty weighting scheme.
+        device: "cpu" or "cuda" for necessity score computation.
+        n_jobs: parallel workers for necessity score computation.
 
-    returns 3 dictionaries of the predcitives.
+    Returns 7-tuple:
+        diag_df            — per-step diagnostics (model counts, necessity stats, Hellinger avg)
+        masked_predictive  — {"mu_hat": (T,n), "sigma_hat": (T,n,n)} under masked weighting
+        weights_masked     — (T, n) Markowitz weights from masked predictives
+        power_predictive   — {"mu_hat": (T,n), "sigma_hat": (T,n,n)} under power weighting
+        weights_power      — (T, n) Markowitz weights from power predictives
+        exp_predictive     — {"mu_hat": (T,n), "sigma_hat": (T,n,n)} under exponential weighting
+        weights_exp        — (T, n) Markowitz weights from exponential predictives
     """
     R_df = returns_df.copy()
     R = R_df.values.astype(float)
@@ -808,8 +688,6 @@ def run_core(
         sum_R = R_burn.sum(axis=0)
         sum_R2 = (R_burn * R_burn).sum(axis=0)
 
-    print("enterred loop")
-
     for t in range(burn_obs, T):
         if t % 100 == 0:
             print(f"Processing time step {t} / {T}...")
@@ -828,7 +706,7 @@ def run_core(
             kappas=kappas,
             Lambdas=Lambdas,
             nus=nus,
-            n_jobs=6,
+            n_jobs=n_jobs,
             random_state=t,  # vary per step for diversity
             device=device,
         )
@@ -880,15 +758,17 @@ def run_core(
         n_models_post_prune = len(mus)
         hellinger_avg = np.nan
 
-        mus, kappas, Lambdas, nus, possibilities, hellinger_avg = _merge_models(
-            mus,
-            kappas,
-            Lambdas,
-            nus,
-            possibilities,
-            merge_threshold=merge_threshold,
-            nu_bandwidth=nu_bandwidth,
-            k_neighbours=k_neighbours,
+        mus, kappas, Lambdas, nus, possibilities, hellinger_avg = (
+            _merge_models_hellinger(
+                mus,
+                kappas,
+                Lambdas,
+                nus,
+                possibilities,
+                merge_threshold=merge_threshold,
+                nu_bandwidth=nu_bandwidth,
+                k_neighbours=k_neighbours,
+            )
         )
 
         n_models_post_merge = len(mus)
@@ -949,5 +829,35 @@ def run_core(
     )
 
 
+def test_run_core() -> tuple[pd.DataFrame, tuple]:
+    """Run a minimal smoke test of run_core on a short return sample."""
+    df = prepare_returns(
+        load_excess_returns_from_kenneth_french_path(start_date="2000-01-01")
+    )
+    df_small = df.iloc[:150].copy()
+
+    results = run_core(
+        df_small,
+        burn_in=20,
+        merge_threshold=0.15,
+        max_models=10,
+        keep_newest=True,
+        nu_bandwidth=20,
+        k_neighbours=3,
+        gamma=1.0,
+        eta=1.0,
+    )
+
+    diag_df = results[0]
+    if diag_df.empty:
+        raise RuntimeError(
+            "smoke_test_run_core produced an empty diagnostic DataFrame."
+        )
+
+    print("test_run_core passed")
+    print(diag_df.tail())
+    return diag_df, results
+
+
 if __name__ == "__main__":
-    smoke_test_run_core()
+    test_run_core()

@@ -1,11 +1,32 @@
+"""Markowitz portfolio weight computation from predictive moments.
+
+Two variants:
+
+Unconstrained — closed-form solution, allows short selling:
+  markowitz_step            — single time step, returns weight vector
+  compute_weights_array     — full time series, returns (T, n) array
+  markowitz_unconstrained   — entry point: mu_sigma_dict + returns_df → weights DataFrame
+
+Long-only — SLSQP constrained optimisation, no short selling:
+  markowitz_step_long_only       — single time step, warm-start optional
+  compute_weights_array_long_only — full time series with warm-starting
+  markowitz_long_only             — entry point: mu_sigma_dict + returns_df → weights DataFrame
+
+Both entry points take:
+  mu_sigma_dict : {"mu_hat": ndarray (T, n), "sigma_hat": ndarray (T, n, n)}
+  returns_df    : pd.DataFrame (T, n) — used only for index/columns alignment
+  burn_in, periods_until_investment : first valid weight at burn_in + periods_until_investment
+  theta         : risk-aversion scalar (default 1.0)
+
+Weights at index t are intended to be applied to returns at t+1 (lag handled upstream).
+Last row is always NaN — predictions at T-1 have no subsequent return to invest in.
+"""
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
-
-# note that the runtime for this is Tn^3, due to the matrix inversion
-# but, since n is constant and small, this is negligible.
 
 
 def markowitz_step(

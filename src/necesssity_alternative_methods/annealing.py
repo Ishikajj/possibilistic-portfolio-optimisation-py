@@ -1,3 +1,12 @@
+"""Simulated annealing approach to necessity score computation. Not used in the main pipeline.
+
+Abandoned because  — the annealing schedule is inherently sequential,
+each candidate depending on the current temperature and previously accepted state.
+While independent chains could be run in parallel across models,
+each chain remains sequential and the per-model compute cost
+is too high
+"""
+
 from __future__ import annotations
 
 import numpy as np
@@ -324,7 +333,9 @@ def _raw_internal_validity_score_deterministic(
     candidate_thetas.append(x0)
 
     best_theta = min(candidate_thetas, key=objective)
-    local_res = minimize(objective, best_theta, method="L-BFGS-B", bounds=bounds)
+    local_res = minimize(
+        objective, best_theta, method="L-BFGS-B", bounds=bounds
+    )
     if local_res.success and np.all(np.isfinite(local_res.x)):
         candidate_thetas.append(np.asarray(local_res.x, dtype=float))
 
@@ -416,7 +427,9 @@ def deterministic_mask_weighting(
     possibilities = np.asarray(possibilities, dtype=float)
 
     if len(necessities) != len(possibilities):
-        raise ValueError("necessities and possibilities must have the same length.")
+        raise ValueError(
+            "necessities and possibilities must have the same length."
+        )
 
     validity_mask = (necessities > 0.0).astype(float)
     adjusted = validity_mask * possibilities
@@ -443,13 +456,17 @@ def power_weighting(
     possibilities = np.asarray(possibilities, dtype=float)
 
     if len(necessities) != len(possibilities):
-        raise ValueError("necessities and possibilities must have the same length.")
+        raise ValueError(
+            "necessities and possibilities must have the same length."
+        )
     if gamma <= 0.0:
         raise ValueError("gamma must be strictly positive.")
     if epsilon < 0.0:
         raise ValueError("epsilon must be nonnegative.")
 
-    adjusted = possibilities * np.power(np.maximum(necessities, 0.0) + epsilon, gamma)
+    adjusted = possibilities * np.power(
+        np.maximum(necessities, 0.0) + epsilon, gamma
+    )
     if sum(adjusted) <= 0.0:
         return possibilities
 
@@ -471,11 +488,15 @@ def exponential_penalty_weighting(
     possibilities = np.asarray(possibilities, dtype=float)
 
     if len(necessities) != len(possibilities):
-        raise ValueError("necessities and possibilities must have the same length.")
+        raise ValueError(
+            "necessities and possibilities must have the same length."
+        )
     if eta < 0.0:
         raise ValueError("eta must be nonnegative.")
 
-    adjusted = possibilities * np.exp(-eta * (1.0 - np.maximum(necessities, 0.0)))
+    adjusted = possibilities * np.exp(
+        -eta * (1.0 - np.maximum(necessities, 0.0))
+    )
 
     if sum(adjusted) <= 0:
         return possibilities

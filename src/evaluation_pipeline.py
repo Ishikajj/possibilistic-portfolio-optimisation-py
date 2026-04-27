@@ -42,7 +42,7 @@ from portfolio_evaluation_functions import (
     certainty_equivalent,
     average_turnover,
 )
-from distribution_evalutation_func import (
+from distribution_evaluation_functions import (
     average_log_likelihood,
     mahalanobis_distance_series,
     multivariate_log_likelihood_series,

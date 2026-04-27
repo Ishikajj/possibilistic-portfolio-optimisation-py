@@ -1,3 +1,18 @@
+"""Hybrid Monte Carlo + deterministic optimisation approach to necessity scores. Not used in the main pipeline.
+
+Design: MC samples from the NIW distribution are used as warm-start initial points
+for a local deterministic optimiser (L-BFGS-B / SLSQP) which then refines each
+candidate toward the true supremum of the possibilistic kernel. The best result
+across all starts is taken as the necessity score. This avoids the coverage problem
+of pure MC.
+
+Abandoned because the gradient steps within each local optimisation are inherently
+sequential — each step depends on the previous one. While starting points and models
+can be parallelised across CPU cores, the gradient computation itself involves matrix
+solves that are O(n³) but too small (n ~ 10) to benefit from GPU. Total compute is
+simply too large
+"""
+
 from __future__ import annotations
 
 import numpy as np

@@ -24,6 +24,8 @@ src/testing_data_input.ipynb
 *.pkl
 CLAUDE.md
 diagnostics_26_march
+comparison_cpu_gpu.py
+compute_longonly_weights.py
 
 
 # mac

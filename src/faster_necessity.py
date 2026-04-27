@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Adaptive fast necessity scores with fixed-Sigma reduction and cached evaluation.
 
 Mathematical procedure
@@ -14,7 +12,8 @@ Here
     h_bar(mu, Sigma | y)
       = exp(-0.5 (y - mu)' Sigma^{-1} (y - mu)),
 
-and f_bar is the normalized possibilistic NIW kernel,
+and f_bar is the normalized possibilistic NIW kernel
+the derivation of how we reached this V_m can be found in the project report.
 
     f_bar(mu, Sigma)
       propto |Sigma|^{-nu/2}
@@ -112,7 +111,29 @@ for each model m:
 
 This is still an approximation in Sigma-space, but for each fixed Sigma it uses
 an exact reduction of the mu-problem and cached linear-algebra terms.
+
+Entry points
+============
+necessity_scores_fast(y_next, mus, kappas, Lambdas, nus, ...)
+    Compute necessity scores V_m for all M models given the next observed return.
+    Set device="cpu" (default, joblib-parallel) or device="cuda"/"mps" (GPU-batched).
+    Called once per time step inside possibilistic_bayesian.run_core.
+
+After scoring, apply one of three necessity-based weighting schemes to the
+raw possibility weights before aggregating predictive moments:
+
+    deterministic_mask_weighting(necessities, possibilities)
+        Hard mask: zero out models with V_m == 0, renormalise.
+
+    power_weighting(necessities, possibilities, gamma, epsilon)
+        Soft weighting: scale possibilities by (V_m + epsilon)^gamma.
+
+    exponential_penalty_weighting(necessities, possibilities, eta)
+        Exponential penalty: scale possibilities by exp(-eta * (1 - V_m)).
 """
+
+from __future__ import annotations
+
 
 import numpy as np
 from numpy.linalg import LinAlgError, slogdet
@@ -159,16 +180,21 @@ def _niw_mode(
 
 def _log_fbar_mode(
     mu0: np.ndarray,
+    kappa: float,
     Lambda: np.ndarray,
     nu: float,
 ) -> float:
-    """Log NIW kernel at its analytic mode, used for normalization."""
+    """Log NIW kernel at its analytic mode, used for normalization.
+
+    The kappa term vanishes at the mode (mu == mu0), so the value does not
+    depend on kappa — but we accept it explicitly to make the call site clear.
+    """
     mu_mode, Sigma_mode = _niw_mode(mu0, Lambda, nu)
     return _log_possibilistic_niw_kernel(
         mu_mode,
         Sigma_mode,
         mu0,
-        kappa=1.0,
+        kappa=kappa,
         Lambda=Lambda,
         nu=nu,
     )
@@ -219,9 +245,9 @@ def _sample_iw_sigmas(
         return []
     n = Lambda.shape[0]
     if nu <= n - 1:
-        raise ValueError(
-            f"nu must satisfy nu > n - 1 for inverse-Wishart sampling; got nu={nu}, n={n}."
-        )
+        # IW not defined for nu <= n-1; fall back to deterministic seeds only.
+        # Mirrors GPU behaviour which clamps dof rather than raising.
+        return []
 
     Sigmas = invwishart.rvs(
         df=nu, scale=Lambda, size=n_samples, random_state=rng
@@ -471,10 +497,7 @@ def _raw_score_fast(
     mu0 = np.asarray(mu0, dtype=float)
     Lambda = np.asarray(Lambda, dtype=float)
 
-    mu_mode, Sigma_mode = _niw_mode(mu0, Lambda, nu)
-    log_f_mode = _log_possibilistic_niw_kernel(
-        mu_mode, Sigma_mode, mu0, kappa, Lambda, nu
-    )
+    log_f_mode = _log_fbar_mode(mu0, kappa, Lambda, nu)
     if not np.isfinite(log_f_mode):
         return 1.0
 
@@ -578,7 +601,7 @@ def necessity_scores_fast(
 
     y_next = np.asarray(y_next, dtype=float)
 
-    if device != "cpu":
+    if device == "cuda":
         return _necessity_scores_gpu(
             y_next=y_next,
             mus=mus,
@@ -638,7 +661,7 @@ def necessity_scores_fast(
     return np.asarray(raw_scores_list, dtype=float)
 
 
-# ------------------- New weighting functions -------------------
+# ------------------- Necessity-based weighting schemes -------------------
 
 
 def deterministic_mask_weighting(
@@ -733,7 +756,6 @@ def exponential_penalty_weighting(
 
 
 # ==================== GPU-batched necessity scoring ====================
-# All functions below are new additions.  Nothing above this line is modified.
 # They mirror the adaptive sigma-resampling logic of necessity_scores_fast but
 # replace the per-model joblib loop with fully-batched PyTorch tensor ops over
 # all M models and K Sigma candidates simultaneously.
@@ -1142,7 +1164,9 @@ def _necessity_scores_gpu(
         perturbed = _perturb_elites_batch_gpu(
             elites, n_perturb, current_scale, sigma_floor
         )  # (M, n_perturb, n, n)
-        Sigmas_batch = torch.cat([elites, perturbed], dim=1)  # (M, actual_elite+n_perturb, n, n)
+        Sigmas_batch = torch.cat(
+            [elites, perturbed], dim=1
+        )  # (M, actual_elite+n_perturb, n, n)
 
     raw_scores = (1.0 - best_values).clamp(min=0.0)
     return raw_scores.cpu().numpy()

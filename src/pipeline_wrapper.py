@@ -1,5 +1,18 @@
-"""Pipeline wrapper: orchestrates all algorithms on a single dataset,
-and loops over multiple Kenneth French datasets.
+"""Pipeline wrapper: orchestrates all algorithms on a single dataset and loops
+over multiple datasets.
+
+Public entry points
+-------------------
+calculate_all_functions_perdatasets(dataset, dataset_name, ...)
+    Run every algorithm on one prepared returns DataFrame and persist outputs.
+
+call_all_datasets(portfolios_paths, ...)
+    Loop over Kenneth French CSV files, running two passes each (value- and
+    equal-weighted blocks).
+
+call_all_simulated_datasets(sim_data_dir, sim_files, ...)
+    Loop over pre-generated simulated dataset CSVs (produced by
+    table1_summary_stats.generate_and_save_sim_datasets).
 """
 
 from __future__ import annotations
@@ -8,6 +21,7 @@ import sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
+from markowitz import markowitz_long_only
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -41,7 +55,6 @@ _EW_START = "Average Equal Weighted Returns -- Daily"
 # ── Internal helpers ─────────────────────────────────────────────────────────
 
 
-# RETURNS ARE SAVED WITHOUT SHIFTING/ LAG
 def _save_algo_outputs(
     folder: Path,
     algo_name: str,
@@ -98,7 +111,7 @@ def calculate_all_functions_perdatasets(
       7.  Kan-Zhou three-fund
       8.  Bayesian model averaging (probabilistic)
       9.  Possibilistic Bayesian averaging — masked weighting
-      10. Possibilistic Bayesian averaging — power weighting
+      10. Possibilistic Bayesian averaging — power penalty weighting
       11. Possibilistic Bayesian averaging — exponential penalty weighting
 
     Outputs are written to ``<output_dir>/<dataset_name>/``.
@@ -131,8 +144,10 @@ def calculate_all_functions_perdatasets(
         Power exponent for power-weighting scheme.
     eta : float
         Penalty scale for exponential-weighting scheme.
-    rolling_window : int
-        Look-back window for rolling/shrinkage strategies.
+    rolling_window_long : int
+        Look-back window for long rolling/shrinkage strategies.
+    rolling_window_short : int
+        Look-back window for short rolling strategies.
     output_dir : Path or str, optional
         Root directory for output folders.  Defaults to current working dir.
 
@@ -195,7 +210,7 @@ def calculate_all_functions_perdatasets(
     print(
         f"[{dataset_name}] Rolling-window Markowitz (window={rolling_window_long})..."
     )
-    roll_ms, weights_roll = rolling_window_weights(
+    roll_long_ms, weights_roll = rolling_window_weights(
         returns_df,
         window=rolling_window_long,
         burn_in=burn_in,
@@ -205,14 +220,14 @@ def calculate_all_functions_perdatasets(
         folder,
         "rolling_window_long",
         weights=weights_roll,
-        mu_sigma_dict=roll_ms,
+        mu_sigma_dict=roll_long_ms,
     )
 
-    # 5. Rolling window ────────────────────────────────────────
+    # 5b. Rolling window (short) ──────────────────────────────
     print(
         f"[{dataset_name}] Rolling-window Markowitz (window={rolling_window_short})..."
     )
-    roll_ms, weights_roll = rolling_window_weights(
+    roll_short_ms, weights_roll = rolling_window_weights(
         returns_df,
         window=rolling_window_short,
         burn_in=burn_in,
@@ -222,7 +237,7 @@ def calculate_all_functions_perdatasets(
         folder,
         "rolling_window_short",
         weights=weights_roll,
-        mu_sigma_dict=roll_ms,
+        mu_sigma_dict=roll_short_ms,
     )
 
     # 6. Jorion Bayes-Stein ──────────────────────────────────
@@ -301,6 +316,26 @@ def calculate_all_functions_perdatasets(
     )
     diag_df.to_csv(folder / "possibilistic_diagnostics.csv")
 
+    for algo_name, mu_sigma in [
+        ("historical_expanding", hist_ms),
+        ("rolling_window_long", roll_long_ms),
+        ("rolling_window_short", roll_short_ms),
+        ("jorion_bayes_stein", jbs_ms),
+        ("kan_zhou_three_fund", kz_ms),
+        ("bayesian_averaging", bay_ms),
+        ("possibilistic_masked", masked_pred),
+        ("possibilistic_power", power_pred),
+        ("possibilistic_exp", exp_pred),
+    ]:
+        long_only_weights = markowitz_long_only(
+            mu_sigma_dict=mu_sigma,
+            returns_df=returns_df,
+            burn_in=burn_in,
+            periods_until_investment=periods_until_investment,
+            theta=theta,
+        )
+        long_only_weights.to_csv(folder / f"{algo_name}_longonly_weights.csv")
+
     print(f"[{dataset_name}] All outputs saved to: {folder}")
     return folder
 
@@ -365,8 +400,6 @@ def call_all_datasets(
     """
     output_folders: list[Path] = []
 
-    for raw_path in portfolios_paths:
-        p = Path(raw_path)
     for entry in portfolios_paths:
         if isinstance(entry, tuple):
             raw_path, ew_end_override = entry
@@ -461,8 +494,6 @@ def call_all_simulated_datasets(
     sim_files : list of (dataset_name, portfolio_filename, rf_filename)
         One tuple per DGP.
     """
-    from simulated_datasets import prepare_sim_returns
-
     sim_data_dir = Path(sim_data_dir)
     output_folders: list[Path] = []
 
@@ -482,11 +513,10 @@ def call_all_simulated_datasets(
             print(f"Simulation : {dataset_name}")
             print(f"{'=' * 60}")
 
-            portfolios_df = pd.read_csv(port_path, parse_dates=["Date"])
-            n_assets = sum(
-                1 for c in portfolios_df.columns if c.startswith("Asset")
-            )
-            returns_df = prepare_sim_returns(portfolios_df, n_assets=n_assets)
+            portfolios_df = pd.read_csv(port_path)
+            returns_df = portfolios_df[
+                [c for c in portfolios_df.columns if c.startswith("Asset")]
+            ]
 
             folder = calculate_all_functions_perdatasets(
                 dataset=returns_df,
@@ -507,7 +537,7 @@ def call_all_simulated_datasets(
             )
 
             # Copy RF into output folder so evaluation pipeline can load it.
-            pd.read_csv(rf_path, parse_dates=["Date"]).to_csv(
+            pd.read_csv(rf_path).to_csv(
                 folder / "rf.csv", index=False
             )
 
@@ -516,7 +546,7 @@ def call_all_simulated_datasets(
     return output_folders
 
 
-def main2():
+def main_simulated():
     SIM_DATA_DIR = Path("../datasets/simulated")
     SIM_T = 10000
     SIM_N = 10
@@ -637,4 +667,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    main2()

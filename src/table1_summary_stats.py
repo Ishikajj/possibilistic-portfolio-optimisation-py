@@ -1,14 +1,17 @@
-"""
-Table 1 – Daily summary statistics for Kenneth French portfolio datasets.
+"""Table 1 – Daily summary statistics for Kenneth French and simulated datasets.
 
-Matches Table 1 of Kan, Wang & Zhou (2022):
-  - Raw (not excess) percentage returns
-  - Risk-free rate is NOT subtracted
-  - Burn-in period data is included (no date filtering by default)
+Produces three panels:
+  Panel A: Ken French value-weighted portfolios
+  Panel B: Ken French equal-weighted portfolios
+  Panel C: Simulated datasets (one row per DGP)
 
-Usage:
+Statistics are in raw percentage returns (RF not subtracted). Ken French missing-value
+sentinels (-99.99) are replaced with NaN. Simulated datasets are in decimals internally
+and multiplied by 100 for display consistency with Panels A and B.
+
+Entry point:
     python src/table1_summary_stats.py
-Writes table1.tex alongside this file.
+Writes table1.tex to src/.
 """
 
 from __future__ import annotations
@@ -25,8 +28,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from data_input import load_kenneth_french_portfolios
 from simulated_datasets import (
-    simulate_rbpc_data,
-    simulate_rbpc_data_regime_shifts,
+    simulate_iid,
+    simulate_regime_shifts,
     simulate_sudden_break,
     simulate_mean_reverting_factor,
     simulate_stochastic_volatility,
@@ -189,8 +192,8 @@ def compute_stats(df: pd.DataFrame) -> dict:
     return {
         "n_assets": len(ret_cols),
         "sample_size": len(df),
-        "start_date": df["Date"].min().strftime("%Y-%m-%d"),
-        "end_date": df["Date"].max().strftime("%Y-%m-%d"),
+        "start_date": df["Date"].min().strftime("%Y-%m-%d") if "Date" in df.columns else "N/A",
+        "end_date": df["Date"].max().strftime("%Y-%m-%d") if "Date" in df.columns else "N/A",
         "lo_mean": means.min(),
         "hi_mean": means.max(),
         "lo_std": stds.min(),
@@ -254,13 +257,13 @@ SIM_CONFIGS: list[SimConfig] = [
     SimConfig(
         name="IID",
         label="iid",
-        sim_func=simulate_rbpc_data,
+        sim_func=simulate_iid,
         kwargs={},
     ),
     SimConfig(
         name="Regime shifts",
         label="reg",
-        sim_func=simulate_rbpc_data_regime_shifts,
+        sim_func=simulate_regime_shifts,
         kwargs={},
     ),
     SimConfig(
@@ -348,7 +351,7 @@ def load_sim_pct(
             f"Simulated dataset not found: {csv_path}\n"
             "Run generate_and_save_sim_datasets() to create it."
         )
-    df = pd.read_csv(csv_path, parse_dates=["Date"])
+    df = pd.read_csv(csv_path)
     ret_cols = [c for c in df.columns if c != "Date"]
     df[ret_cols] = df[ret_cols] * 100
     return df

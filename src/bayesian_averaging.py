@@ -1,102 +1,110 @@
+"""Probabilistic Bayesian model averaging over Normal-Inverse-Wishart (NIW) models.
+
+At each time step t the algorithm maintains a pool of NIW models, each representing
+a different window for determining the mean and the covariance. The pool grows by one model per period
+and is pruned to prevent unbounded growth.
+
+Algorithm (per time step)
+-------------------------
+1. Birth   — spawn a new NIW model whose prior mean and scale are set to the
+             cross-asset average of historical sample moments.
+2. Observe — receive the realised return vector R_t.
+3. Update  — apply the NIW conjugate update (equations 7a/7b) to every model.
+4. Reweight — compute each model's marginal likelihood and update probabilities
+              via Bayes' rule; probabilities are normalised to sum to one.
+5. Prune   — discard low-probability models to keep the pool tractable.
+6. Predict — form the BMA predictive mean and covariance as the
+             probability-weighted average across models.
+
+Steps 1–6 repeat for every observation, producing a time-indexed series of
+predictive moments (mu_hat, sigma_hat) which are passed to the Markowitz
+solver to generate portfolio weights.
+
+Design constraint
+-----------------
+Each model shares a single scalar probability, so the same candidate window
+applies to all assets jointly. Per-asset windows are not supported because the
+covariance matrix is common across assets.
+
+Entry point
+-----------
+run_core(returns_df, burn_in, periods_until_investment, ...)
+    Input : returns_df — pd.DataFrame of shape (T, n), numeric excess returns.
+    Output: (mu_sigma_dict, weights_df)
+        mu_sigma_dict — {"mu_hat": ndarray (T, n), "sigma_hat": ndarray (T, n, n)}
+        weights_df    — pd.DataFrame (T, n), Markowitz weights aligned to returns_df.index
+"""
+
 from __future__ import annotations
 import numpy as np
 import pandas as pd
 from numpy.linalg import slogdet
-from prior_selection import sharing_prior_update
 from scipy.special import multigammaln
-from data_input import load_excess_returns_from_kenneth_french_path, prepare_returns
+from data_input import (
+    load_excess_returns_from_kenneth_french_path,
+    prepare_returns,
+)
 from markowitz import markowitz_unconstrained
 
-# TODO: main problem is the T^2n^3 complexity of the algorithm, where t is the time steps and n is assets
-# the n^3 remains fixed as the number of assets = 11
-# but T grows monsterly: we have about 70 years of data of 250 trading days each
-# this becomes bad quick
-# Update: 1963-2011, T = 12000 took about 40 minutes.
 
-"""step 1
--> create a new model with mean  = common mean across all previous days and assets,
- similarly create new delta and k using the +1 update rule.
- the probability of this model is according to the past models probabilities and our prior used.
+def sharing_prior_update(
+    probs_prev: np.ndarray,
+    t_models: int,
+    alpha: float = 1.0,
+) -> np.ndarray:
+    """Birth-step prior update with sharing parameter alpha in [0,1].
 
-step 2
--> observe returns for the new day
+    Data structures:
+      - probs_prev: shape (t_models-1,) representing P_{t-1}(m | F_{t-1}) for m=1..t-1
+      - returns: shape (t_models,) representing P_t(m | F_{t-1}) for m=1..t
 
-step 3
--> using the returns, calculate the updated means and covariances using formula 7a and 7b
+    alpha=1.0 -> perfect sharing (paper's alpha=1 case)
+    alpha=0.0 -> no sharing (old models keep their prob; newborn gets 0)
+    """
+    if t_models < 1:
+        raise ValueError("t_models must be >= 1")
+    if t_models == 1:
+        return np.array([1.0])
 
-step 4
--> using the likelihood function, calculate the updated probabilities of each model. this will require the previous convariance, new covariance, previous delta, new delta, previous k, new k, previous v, new v
+    if probs_prev.shape[0] != t_models - 1:
+        raise ValueError("probs_prev must have length t_models-1")
 
-step 5
--> discard the old (sigma, delta ( v - n - 1), k, mean)
+    a = float(alpha)
+    if not (0.0 <= a <= 1.0):
+        raise ValueError("alpha must be in [0, 1]")
 
-step 6
--> use these updated model probabilities and the updated model variances and means to calculate the expected returns and covariances. store said time indexed series.
+    # Retained mass for existing models
+    out = np.zeros(t_models, dtype=float)
+    out[: t_models - 1] = (1.0 - a) * probs_prev
 
-step 7
--> do steps 1-6 until you reach the end of time
+    # Shared mass: each old model q shares alpha*P_{t-1}(q) equally with itself and newer models
+    # Contribution from q (1-based) to any m>=q is alpha*P_{t-1}(q)/(t - q + 1)
+    q = np.arange(1, t_models)  # 1..t-1
+    share_each = a * probs_prev / (t_models - q + 1.0)  # length t-1
 
-short note:
+    # For model m (1-based), add sum_{q<=m} share_each[q]
+    # (cumsum handles this for m=1..t-1)
+    out[: t_models - 1] += np.cumsum(share_each)
 
-Weights calculation:
-the integer indexed series of bayesian averaged mean and covariances is used to calculate the markowitz weights using a separate function.
+    # Newborn model m=t gets all shared parts from all previous models
+    out[t_models - 1] = (
+        share_each.sum()
+    )  # cumsum gives the series of pasts (s1, s2, s3) and sum just gives the final element of the cumsum series.
 
-this function will return a integer indexed series of weights of each assets.
-
-Portfolio return determination:
-using the weights and the returns series that we get, we can run these to calculate the sharpe and certainty equivalents each day.
-
-for each model, we have its mean, covariance, degrees of freedom k and v, and its probability. as time goes on, the number of models increases. step 1.1 indicates the models of t according to the information available at time t-1
-
-okay so each model uses the probability as a scalar, meaning we can not have different windows across different assets even though that might be a better predictor of mean.
-this is due to having a common covariance matrix across all assets, even if means differ."""
-
-
-"""data input is
-NoDur           float64
-Durbl           float64
-Manuf           float64
-Enrgy           float64
-Chems           float64
-BusEq           float64
-Telcm           float64
-Utils           float64
-Shops           float64
-Hlth            float64
-Money           float64
-Other           float64
-time           datetime64[ns]
-"""
+    # Numerical safety
+    out = np.maximum(out, 0.0)
+    s = out.sum()
+    if s <= 0:
+        # fallback: uniform
+        return np.full(t_models, 1.0 / t_models)
+    return out / s  # makes sure that we normalise the vector to sum to 1.
 
 
 def _new_model_prior(
     sum_R: np.ndarray, sum_R2: np.ndarray, t: int
 ) -> tuple[float, float]:
     """Compute the scalar prior hyperparameters for the newborn model at time t.
-    Note that at birth, delta = 1, and since Sigma = delta * Lambda, at birth, both these are identical.
-
     This implements the paper's *common* (across assets) prior for the new model:
-    Parameters
-    ----------
-    sum_R:
-        Running column-wise sum of past returns, shape (n,).
-
-    sum_R2:
-        Running column-wise sum of past squared returns, shape (n,).
-
-    t:
-        Number of past observations included in the running sums.
-        Must satisfy t >= 0.
-
-    Returns
-    -------
-    (mu_bar, lambda_bar):
-        mu_bar is the average across assets of the historical sample means.
-        lambda_bar is the average across assets of the historical sample variances.
-
-    Note:
-    The paper uses t-1 for the mean and t-2 for the variance, this is due to differently defining what the current time period is.
-    mathematically this is equivalent.
     """
     if t <= 0:
         return 0.0, 1e-4
@@ -166,7 +174,9 @@ def _update_probs(
     )  # logaddexp only takes 2 inputs, reduce applies repeatedly.
 
     p = np.exp(lognum - logZ)
-    p = np.maximum(p, 0.0)  # effectively handing cases where the likelihood is -inf
+    p = np.maximum(
+        p, 0.0
+    )  # effectively handing cases where the likelihood is -inf
     return p / p.sum()  # normalise to sum 1.
 
 
@@ -290,6 +300,8 @@ def _prune_models(
     - optionally force retention of the newest model (last index)
 
     After pruning, probabilities are renormalized to sum to 1.
+
+    Generally the threshhold is kept to 1e-6 = 0.0001% to prevent numerical issues.
     """
     n_models = len(mus)
 
@@ -299,7 +311,9 @@ def _prune_models(
 
     keep_idx = np.flatnonzero(keep_mask)
     if keep_idx.size == 0:
-        fallback_count = n_models if max_models is None else min(n_models, max_models)
+        fallback_count = (
+            n_models if max_models is None else min(n_models, max_models)
+        )
         keep_idx = np.arange(n_models - fallback_count, n_models, dtype=int)
 
     if max_models is not None and keep_idx.size > max_models:
@@ -331,8 +345,6 @@ def _prune_models(
     return mus, kappas, Lambdas, nus, probs
 
 
-# return core gets the input from data_input file, it receives a file with integer indexing, a column for time also.
-# this helps you specify the date you want to slice, the source of the data.
 def run_core(
     returns_df: pd.DataFrame,
     burn_in: int = 1000,
@@ -341,8 +353,13 @@ def run_core(
     max_models: int | None = 2000,
     keep_newest: bool = True,
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
+    """Run probabilistic Bayesian model averaging over NIW models.
 
-    # important to note that a dataframe with the time index is still retained, and can be appended to the end of our produced weight series if needed.
+    Input : returns_df — (T, n) numeric excess returns, no Date/RF column.
+    Output: (mu_sigma_dict, weights_df)
+        mu_sigma_dict — {"mu_hat": (T, n), "sigma_hat": (T, n, n)}, NaN before burn-in.
+        weights_df    — Markowitz weights (T, n), aligned to returns_df.index.
+    """
     R_df = returns_df.copy()
     R = R_df.values.astype(float)
     T, n = R.shape
@@ -378,7 +395,9 @@ def run_core(
 
         n_models = len(mus)
 
-        probs = sharing_prior_update(probs_prev=probs, t_models=n_models, alpha=1.0)
+        probs = sharing_prior_update(
+            probs_prev=probs, t_models=n_models, alpha=1.0
+        )
 
         # Now, after a new model has been added, it has been given a weak prior based on previous information flow
         # Only after that we observe the returns for the day.
@@ -422,9 +441,9 @@ def main() -> None:
     df = prepare_returns(
         load_excess_returns_from_kenneth_french_path(start_date="2020-01-01")
     )
-    results = run_core(df, burn_in=100)
-    print(results["mu_hat"])
-    print(results["sigma_hat"])
+    predictives, weights = run_core(df, burn_in=100)
+    print(predictives["mu_hat"])
+    print(predictives["sigma_hat"])
 
 
 if __name__ == "__main__":

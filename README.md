@@ -60,7 +60,7 @@ This is the probabilistic version of the model-combination engine and is the clo
 
 Two files address necessity-style weighting for possibilistic models:
 
-- `necessity_calculation.py`: a **naive Monte Carlo** approximation of model necessity / internal validity
+- `necessity_calculation.py`: a **naive Monte Carlo** approximation of model necessity / the deminternal validity
 - `necessity_deterministically.py`: a more **deterministic hybrid** approach using analytic starts, optional Monte Carlo seeds, and local optimization
 
 ### Evaluation
