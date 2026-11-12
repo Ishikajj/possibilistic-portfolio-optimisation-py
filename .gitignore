@@ -25,7 +25,7 @@ CLAUDE.md
 diagnostics_26_march
 comparison_cpu_gpu.py
 compute_longonly_weights.py
-tests/
+src/tests/
 
 
 # mac

@@ -11,7 +11,6 @@ average_turnover        — mean daily sum of absolute weight changes.
 
 import numpy as np
 import pandas as pd
-from typing import Optional, NamedTuple
 
 
 def portfolio_returns(
@@ -51,7 +50,7 @@ def portfolio_returns(
 def calculate_sharpe_ratio(
     returns_df: pd.DataFrame,
     weights_df: pd.DataFrame,
-    scaling_factor: Optional[int] = None,
+    scaling_factor: int | None = None,
 ) -> float:
     """Compute daily Sharpe ratio from excess returns and weights."""
     assert isinstance(weights_df, pd.DataFrame)
@@ -79,8 +78,8 @@ def rolling_sharpe_ratio(
     returns_df: pd.DataFrame,
     weights_df: pd.DataFrame,
     window: int,
-    scaling_factor: Optional[int] = None,
-    min_periods: Optional[int] = None,
+    scaling_factor: int | None = None,
+    min_periods: int | None = None,
 ) -> pd.Series:
     """Compute a rolling Sharpe ratio series from (excess) returns and weights.
 

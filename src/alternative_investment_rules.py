@@ -20,17 +20,16 @@ mu_sigma_dict keys: "mu_hat" (T, n), "sigma_hat" (T, n, n), aligned to returns_d
 
 import numpy as np
 import pandas as pd
-from markowitz import markowitz_unconstrained
-from typing import Optional
-
+from scipy.special import beta as _beta  # Beta(a,b)
 from scipy.special import (
     betainc as _betainc,
 )  # regularized incomplete beta I_x(a,b)
-from scipy.special import beta as _beta  # Beta(a,b)
+
+from markowitz import markowitz_unconstrained
 
 
 def _incomplete_beta_unregularized(a: float, b: float, x: float) -> float:
-    """Return unregularized incomp2lete beta B_x(a,b) = \int_0^x t^{a-1} (1-t)^{b-1} dt."""
+    r"""Return unregularized incomp2lete beta B_x(a,b) = \int_0^x t^{a-1} (1-t)^{b-1} dt."""
     if not (0.0 <= x <= 1.0) or not np.isfinite(x):
         return float("nan")
 

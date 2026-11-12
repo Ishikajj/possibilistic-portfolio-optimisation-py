@@ -110,7 +110,9 @@ def compute_weights_array_long_only(
             continue
 
         result = minimize(
-            lambda w: float(-mu_hat[t] @ w + (theta / 2.0) * w @ sigma_hat[t] @ w),
+            lambda w: float(
+                -mu_hat[t] @ w + (theta / 2.0) * w @ sigma_hat[t] @ w
+            ),
             w_prev,
             jac=lambda w: -mu_hat[t] + theta * sigma_hat[t] @ w,
             method="SLSQP",

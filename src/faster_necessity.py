@@ -134,12 +134,11 @@ raw possibility weights before aggregating predictive moments:
 
 from __future__ import annotations
 
-
 import numpy as np
+from joblib import Parallel, delayed
 from numpy.linalg import LinAlgError, slogdet
 from scipy.optimize import minimize_scalar
 from scipy.stats import invwishart
-from joblib import Parallel, delayed
 
 
 def _log_possibilistic_niw_kernel(
@@ -848,9 +847,7 @@ def _sample_iw_batch_gpu(Lambdas_t, nus_t, K, sigma_floor, dev):
     # Degrees of freedom for chi2 diagonal entries: dof[m, i] = nu_m - i
     dof = (
         nus_t.unsqueeze(-1) - torch.arange(n, device=dev, dtype=dtype)
-    ).clamp(
-        min=1.0
-    )  # (M, n)
+    ).clamp(min=1.0)  # (M, n)
     dof_exp = dof.unsqueeze(1).expand(M, K, n)  # (M, K, n)
 
     # chi2(df) = Gamma(df/2, rate=0.5)

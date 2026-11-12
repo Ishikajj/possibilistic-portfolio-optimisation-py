@@ -19,30 +19,30 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
 from markowitz import markowitz_long_only
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from data_input import (
-    load_excess_returns_from_kenneth_french_path,
-    load_risk_free_rate,
-    prepare_returns,
-    DATA_PATH,
-    RISK_FREE_RATE_PATH,
-)
-from typing import Callable
-import possibilistic_bayesian
+
 import bayesian_averaging
+import possibilistic_bayesian
 from alternative_investment_rules import (
     equal_weight_strategy,
-    market_weight_strategy,
-    minimum_variance_strategy,
+    historical_expectations_weights,
     jorion_bayes_stein_strategy,
     kan_zhou_three_fund_strategy,
-    historical_expectations_weights,
+    market_weight_strategy,
+    minimum_variance_strategy,
     rolling_window_weights,
+)
+from data_input import (
+    RISK_FREE_RATE_PATH,
+    load_excess_returns_from_kenneth_french_path,
+    prepare_returns,
 )
 
 # ── Kenneth French marker strings ────────────────────────────────────────────
@@ -537,9 +537,7 @@ def call_all_simulated_datasets(
             )
 
             # Copy RF into output folder so evaluation pipeline can load it.
-            pd.read_csv(rf_path).to_csv(
-                folder / "rf.csv", index=False
-            )
+            pd.read_csv(rf_path).to_csv(folder / "rf.csv", index=False)
 
             output_folders.append(folder)
 

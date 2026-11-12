@@ -16,23 +16,21 @@ Writes table1.tex to src/.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
-
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from data_input import load_kenneth_french_portfolios
 from simulated_datasets import (
     simulate_iid,
-    simulate_regime_shifts,
-    simulate_sudden_break,
     simulate_mean_reverting_factor,
+    simulate_regime_shifts,
     simulate_stochastic_volatility,
+    simulate_sudden_break,
     simulate_sudden_covariance_break,
 )
 
@@ -60,7 +58,7 @@ class PortfolioConfig:
     path: Path
     # end markers control which block load_kenneth_french_portfolios extracts
     vw_end_marker: str = EW_MARKER  # ends value-weighted block
-    ew_end_marker: Optional[str] = None  # None → read to EOF
+    ew_end_marker: str | None = None  # None → read to EOF
 
 
 PORTFOLIO_CONFIGS: list[PortfolioConfig] = [
@@ -192,8 +190,12 @@ def compute_stats(df: pd.DataFrame) -> dict:
     return {
         "n_assets": len(ret_cols),
         "sample_size": len(df),
-        "start_date": df["Date"].min().strftime("%Y-%m-%d") if "Date" in df.columns else "N/A",
-        "end_date": df["Date"].max().strftime("%Y-%m-%d") if "Date" in df.columns else "N/A",
+        "start_date": df["Date"].min().strftime("%Y-%m-%d")
+        if "Date" in df.columns
+        else "N/A",
+        "end_date": df["Date"].max().strftime("%Y-%m-%d")
+        if "Date" in df.columns
+        else "N/A",
         "lo_mean": means.min(),
         "hi_mean": means.max(),
         "lo_std": stds.min(),

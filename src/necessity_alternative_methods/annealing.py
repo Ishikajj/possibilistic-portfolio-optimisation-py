@@ -12,7 +12,6 @@ from __future__ import annotations
 import numpy as np
 from numpy.linalg import LinAlgError, slogdet
 from scipy.optimize import dual_annealing, minimize
-from scipy.stats import invwishart
 
 """too slow."""
 

@@ -10,27 +10,35 @@ dependencies = [
     "jinja2>=3.1.6",
     "joblib>=1.5.3",
     "matplotlib>=3.10.8",
-    "mypy>=1.19.1",
     "numpy>=2.4.2",
     "pandas>=3.0.1",
-    "pandas-stubs>=3.0.0.260204",
     "scipy>=1.17.1",
     "seaborn>=0.13.2",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-  "black",
-  "flake8",
+    "ruff",
+    "pandas-stubs>=3.0.0.260204",
+    "pytest>=9.2.0",
 ]
 
-[tool.black]
+[tool.ruff]
 line-length = 80
-target-version = ["py311"]
+target-version = "py311"
 
-[tool.flake8]
-max-line-length = 120
-extend-ignore = ["E203", "W503"]
+[tool.ruff.lint]
+# pycodestyle, pyflakes, isort, pyupgrade, bugbear, numpy-specific rules
+select = ["E", "W", "F", "I", "UP", "B", "NPY"]
+ignore = [
+    "E501",  # line length is the formatter's job
+    "B905",  # zip() without strict= — only used in plotting, mismatches are harmless
+]
 
-[tool.mypy]
-follow_untyped_imports = true
+[tool.pyright]
+# Read by Pylance in VS Code
+typeCheckingMode = "basic"
+
+[tool.pytest.ini_options]
+  testpaths = ["tests"]   # where your tests live
+  pythonpath = ["src"]

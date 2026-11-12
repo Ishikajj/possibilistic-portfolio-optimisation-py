@@ -18,8 +18,9 @@ All returns are stored in decimal units (percent / 100).
 
 from __future__ import annotations
 
-from pathlib import Path
 from io import StringIO
+from pathlib import Path
+
 import pandas as pd
 
 # Paths (relative to this file)

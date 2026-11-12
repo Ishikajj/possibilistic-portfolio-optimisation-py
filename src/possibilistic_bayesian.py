@@ -23,8 +23,6 @@ power_pred, power_weights, exp_pred, exp_weights).
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import pandas as pd
 from numpy.linalg import slogdet

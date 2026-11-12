@@ -165,7 +165,7 @@ def _pack_simulation_frames(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return (portfolios_df, rf_df) with integer index."""
     n_assets = excess.shape[1]
-    asset_cols = [f"Asset{i+1}" for i in range(n_assets)]
+    asset_cols = [f"Asset{i + 1}" for i in range(n_assets)]
     portfolios_df = pd.DataFrame(excess, columns=asset_cols)
     rf_df = pd.DataFrame({"RF": RF})
     return portfolios_df, rf_df

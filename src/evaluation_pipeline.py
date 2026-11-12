@@ -36,16 +36,16 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from portfolio_evaluation_functions import (
-    calculate_sharpe_ratio,
-    rolling_sharpe_ratio,
-    certainty_equivalent,
-    average_turnover,
-)
 from distribution_evaluation_functions import (
     average_log_likelihood,
     mahalanobis_distance_series,
     multivariate_log_likelihood_series,
+)
+from portfolio_evaluation_functions import (
+    average_turnover,
+    calculate_sharpe_ratio,
+    certainty_equivalent,
+    rolling_sharpe_ratio,
 )
 
 _ROLLING_WINDOW = 252

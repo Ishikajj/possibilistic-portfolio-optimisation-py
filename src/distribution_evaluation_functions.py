@@ -11,12 +11,11 @@ average_log_likelihood        — scalar mean of the above, used in evaluation_p
 import numpy as np
 import pandas as pd
 from numpy.linalg import LinAlgError, slogdet
-from typing import Dict
 
 
 def _prepare_scoring_inputs(
     returns_df: pd.DataFrame,
-    mu_sigma_dict: Dict[str, np.ndarray],
+    mu_sigma_dict: dict[str, np.ndarray],
     lag: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, pd.Index]:
     """Prepare realized returns and lagged predicted moments for scoring.
@@ -88,7 +87,7 @@ def _gaussian_scoring_terms(
 
 def mahalanobis_distance_series(
     returns_df: pd.DataFrame,
-    mu_sigma_dict: Dict[str, np.ndarray],
+    mu_sigma_dict: dict[str, np.ndarray],
     *,
     lag: int = 1,
     squared: bool = False,
@@ -123,7 +122,7 @@ def mahalanobis_distance_series(
 
 def multivariate_log_likelihood_series(
     returns_df: pd.DataFrame,
-    mu_sigma_dict: Dict[str, np.ndarray],
+    mu_sigma_dict: dict[str, np.ndarray],
     *,
     lag: int = 1,
     regularization: float = 1e-10,
@@ -157,7 +156,7 @@ def multivariate_log_likelihood_series(
 
 def average_log_likelihood(
     returns_df: pd.DataFrame,
-    mu_sigma_dict: Dict[str, np.ndarray],
+    mu_sigma_dict: dict[str, np.ndarray],
     *,
     lag: int = 1,
     regularization: float = 1e-10,

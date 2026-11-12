@@ -36,10 +36,12 @@ run_core(returns_df, burn_in, periods_until_investment, ...)
 """
 
 from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 from numpy.linalg import slogdet
 from scipy.special import multigammaln
+
 from data_input import (
     load_excess_returns_from_kenneth_french_path,
     prepare_returns,
@@ -109,8 +111,8 @@ def _new_model_prior(
     if t <= 0:
         return 0.0, 1e-4
 
-    mu_vec = sum_R / (
-        float(t) - 1
+    mu_vec = (
+        sum_R / (float(t) - 1)
     )  # shape (n,), only information until t-1 is used to form the new models priors.
     mu_bar = float(mu_vec.mean())
 
@@ -200,8 +202,8 @@ def _log_marginal_likelihood(
     k1 = kappa + 1.0
     nu1 = nu + 1.0
     d = R_t - mu
-    L1 = Lambda + (kappa / k1) * np.outer(
-        d, d
+    L1 = (
+        Lambda + (kappa / k1) * np.outer(d, d)
     )  # Paper uses sigma for updates, which has been simplified here to Lambda. this is also why the delta denominator vanishes.
 
     s0, ld0 = np.linalg.slogdet(
