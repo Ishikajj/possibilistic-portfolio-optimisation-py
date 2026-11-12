@@ -1,0 +1,38 @@
+{
+  "_description": "FYP submitted results. Written by hand on 2026-11-13 from git history; not saved by the pipeline itself.",
+  "_source_commit": "4e8cb38 (2026-04-14 18:21, 'new params'); main() for real data, main2() for simulated",
+  "_files_dated": "all files 2026-04-14 (copied in, probably from a GPU machine)",
+  "_verified_from_outputs": "T and n of simulated data, first weight row = 1000 (BURN_IN + PERIODS_UNTIL_INVESTMENT), pool capped at 100 models (MAX_MODELS), sim returns identical to ../datasets/simulated/*_T10000_N10_seed42.csv",
+  "_from_code_only": "everything else, incl. DEVICE; uncommitted edits on the run machine cannot be ruled out",
+
+  "START_DATE": "1980-01-01",
+  "BURN_IN": 500,
+  "PERIODS_UNTIL_INVESTMENT": 500,
+  "THETA": 1.0,
+  "MAX_MODELS": 100,
+  "MERGE_THRESHOLD": 0.15,
+  "NU_BANDWIDTH": 50,
+  "K_NEIGHBOURS": 5,
+  "GAMMA": 1.0,
+  "ETA": 1.0,
+  "ROLLING_WINDOW_LONG": 252,
+  "ROLLING_WINDOW_SHORT": 63,
+  "DEVICE": "cuda",
+  "BAYESIAN_MAX_MODELS": 2000,
+  "BAYESIAN_THETA": 1.0,
+
+  "REAL_DATASETS": [
+    "6_Portfolios_size_momentum", "10_Portfolios_ltr", "6_Portfolios_size_str",
+    "10_Portfolios_Prior_momentum", "10_Portfolios_Prior_str", "10_Industry_Portfolios_Daily",
+    "10_Portfolios_Formed_on_booktomarket", "10_Portfolios_Formed_on_ME_size",
+    "6_Portfolios_size_ltr", "6_Portfolios_size_btm"
+  ],
+  "WEIGHTINGS": ["value_weighted", "equal_weighted"],
+
+  "SIMULATED": {
+    "SIM_T": 10000,
+    "SIM_N": 10,
+    "SIM_SEED": 42,
+    "DATASETS": ["iid", "reg", "break", "mr", "cov_break", "stoch_vol"]
+  }
+}

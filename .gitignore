@@ -22,11 +22,11 @@ build/
 *.npy
 *.pkl
 CLAUDE.md
-diagnostics_26_march
-comparison_cpu_gpu.py
-compute_longonly_weights.py
-src/tests/
 
 
 # mac
 .DS_Store
+
+REFACTOR_PLAN.md
+# regenerable outputs (plots, LaTeX tables)
+figures/

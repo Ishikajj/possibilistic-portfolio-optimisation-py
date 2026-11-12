@@ -12,6 +12,11 @@
 - [ ] **"Historical expanding" is a rolling window of `burn_in + piu` days** (`alternative_investment_rules.py:83`) — decided: make it truly expanding, `iloc[:t+1]`. Changes results → fix after tests, own commit.
 - [ ] **Save `rf.csv` for real datasets too** — only simulated folders get one (`pipeline_wrapper.py:540`); real-data evaluation re-derives RF from its own hard-coded `START_DATE` (`evaluation_pipeline.py:392`), so changing the start date in only one place silently misaligns CEQ. Currently aligned (checked all 20 folders).
 - [ ] Hard-coded `device="cuda"` in both `main()`s of `pipeline_wrapper.py` (see 2.6 notes) — breaks the pipeline on the Mac.
+- [ ] **Sharpe-difference test** — `sharpe_difference_test` / `compare_to_benchmark` (GMM + Newey-West, 22 lags, Anderson & Cheng 2016 App. B.1) moved into `portfolio_evaluation_functions.py` (2026-11-13), imports fixed, otherwise unchanged and untested. To do: check the Jacobian / formulas against the paper, write tests, handle identical series (currently `t = nan` + warning instead of 0), then add to `evaluation_pipeline` output.
+- [ ] **Bug: possibilistic starts investing at row 500, not 1000** — `possibilistic_bayesian.run_core` accepts `periods_until_investment` but passes `periods_until_investment=0` to `markowitz_unconstrained`, so weights start at `burn_in` instead of `burn_in + periods_until_investment` like every other strategy. Confirmed in `results_fyp_submitted/iid` (possibilistic first weight row 500, Bayesian 1000). Evaluation drops each strategy's own NaN rows, so FYP possibilistic Sharpe / CEQ / log-likelihood cover 500 extra days vs the others. Fix in refactor step 2.9; snapshot diff expected (possibilistic weights rows 500–999 + their eval only).
+- [ ] **Bug: evaluating a new simulated run fails** — simulated CSVs were regenerated 2026-04-27 without a `Date` column, so the pipeline now writes a Date-less `rf.csv`; `evaluation_pipeline.py` `__main__` reads it with `index_col=0` → `KeyError: 'RF'` (verified). Old run folders still have `Date` and work. Fix in step 2.11.
+- [ ] **Bug: singular covariance crashes the run** — `markowitz.markowitz_step` uses `np.linalg.inv`, so a singular Σ raises `LinAlgError` and stops the whole pipeline; near-singular Σ gives weights ~±1e13 with no warning; `theta=0` → `ZeroDivisionError` (long-only silently goes all-in on max μ); NaN in Σ but not μ → silent NaN weights. Decide handling in step 2.1.
+- [ ] **Bug (silent failures) in `possibilistic_bayesian.run_core`** — `except Exception: pass` around aggregation leaves NaN rows with no count or warning; `burn_obs = min(burn_in, T // 2)` silently shortens the burn-in on short data. Step 2.9.
 
 ## Secondary — tooling & housekeeping
 
@@ -34,8 +39,8 @@
 ### Open (low priority)
 - [~] 2.7 / 7 Package layout (`src/possibilistic_portfolio/` + `[build-system]`) — removes `sys.path` hacks; nice-to-have.
 - [ ] Write proper tests (loader, Bayesian averaging on tiny simulated data, …).
-- [ ] `src/compute_longonly_weights.py:69,228,234` — undefined `NamedTuple`, `portfolio_returns` (script crashes).
+- [x] `src/compute_longonly_weights.py` — deleted (long-only now computed in the pipeline); Sharpe test moved to `portfolio_evaluation_functions.py`.
 - [ ] `src/alternative_investment_rules.py:31` — `-> float` function can fall through without returning.
 - [ ] `src/necessity_alternative_methods/annealing.py:326` — invalid `seed` argument.
-- [ ] `.gitignore` hides `comparison_cpu_gpu.py`, `compute_longonly_weights.py`, `.vscode/`.
+- [ ] `.gitignore` hides `.vscode/`. (`comparison_cpu_gpu.py`, `compute_longonly_weights.py` deleted, lines removed.)
 - [ ] `CLAUDE.md` out of date (lists removed files).
