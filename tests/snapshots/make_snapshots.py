@@ -103,10 +103,15 @@ def build(src: Path, bypass_necessity: bool = False) -> dict[str, np.ndarray]:
 
     sim_dir = DATASETS_DIR / "simulated"
     sim = pd.read_csv(sim_dir / "iid_T10000_N10_seed42.csv").iloc[:T, :N_ASSETS]
-    sim_rf = pd.read_csv(sim_dir / "rf_iid_T10000_N10_seed42.csv")["RF"].iloc[:T]
+    sim_rf = pd.read_csv(sim_dir / "rf_iid_T10000_N10_seed42.csv")["RF"].iloc[
+        :T
+    ]
 
     with tempfile.TemporaryDirectory() as tmp:
-        for name, returns_df, rf in [("real", real, real_rf), ("sim", sim, sim_rf)]:
+        for name, returns_df, rf in [
+            ("real", real, real_rf),
+            ("sim", sim, sim_rf),
+        ]:
             t0 = time.time()
             folder = pipeline_wrapper.calculate_all_functions_perdatasets(
                 dataset=returns_df, dataset_name=name, output_dir=tmp, **PARAMS

@@ -30,3 +30,5 @@ CLAUDE.md
 REFACTOR_PLAN.md
 # regenerable outputs (plots, LaTeX tables)
 figures/
+# snapshot references (regenerate from `dev` via tests/snapshots/make_snapshots.py; ~1 min bypassed, ~80 min real necessity)
+tests/snapshots/*.npz

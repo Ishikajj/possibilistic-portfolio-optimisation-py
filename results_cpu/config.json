@@ -5,7 +5,6 @@
   "_verified_from_outputs": "T and n of simulated data (6000 x 5), first weight row = 1000; pool never exceeded 75 models (consistent with MAX_MODELS = 80, cap never reached)",
   "_from_code_only": "everything else; simulated settings especially uncertain (inferred from a later commit)",
   "_anomalies": "folder 6_Portfolios_size_btm_rename_weighted (probably the value-weighted btm run, renamed); no cov_break / stoch_vol; extra diag_var_ratio.csv and portfolio_var_ratio.csv files",
-
   "START_DATE": "1980-01-01",
   "BURN_IN": 500,
   "PERIODS_UNTIL_INVESTMENT": 500,
@@ -21,19 +20,33 @@
   "DEVICE": "cpu",
   "BAYESIAN_MAX_MODELS": 2000,
   "BAYESIAN_THETA": 1.0,
-
   "REAL_DATASETS": [
-    "10_Industry_Portfolios_Daily", "6_Portfolios_size_btm", "10_Portfolios_Formed_on_booktomarket",
-    "6_Portfolios_size_ltr", "10_Portfolios_Formed_on_ME_size", "6_Portfolios_size_momentum",
-    "10_Portfolios_ltr", "6_Portfolios_size_str", "10_Portfolios_Prior_momentum", "10_Portfolios_Prior_str"
+    "10_Industry_Portfolios_Daily",
+    "6_Portfolios_size_btm",
+    "10_Portfolios_Formed_on_booktomarket",
+    "6_Portfolios_size_ltr",
+    "10_Portfolios_Formed_on_ME_size",
+    "6_Portfolios_size_momentum",
+    "10_Portfolios_ltr",
+    "6_Portfolios_size_str",
+    "10_Portfolios_Prior_momentum",
+    "10_Portfolios_Prior_str"
   ],
-  "WEIGHTINGS": ["value_weighted", "equal_weighted"],
-
+  "WEIGHTINGS": [
+    "value_weighted",
+    "equal_weighted"
+  ],
   "SIMULATED": {
     "SIM_T": 6000,
     "SIM_N": 5,
     "SIM_SEED": 42,
-    "DATASETS": ["iid", "reg", "break", "mr"],
+    "DATASETS": [
+      "iid",
+      "reg",
+      "break",
+      "mr"
+    ],
     "MERGE_THRESHOLD": 1.0
-  }
+  },
+  "_merge_distance": "Mahalanobis (_merge_models_mahalanobis at 5274011), with the pooled-covariance bug: effective threshold sqrt(2) looser than MERGE_THRESHOLD. results_fyp_submitted uses Hellinger."
 }
