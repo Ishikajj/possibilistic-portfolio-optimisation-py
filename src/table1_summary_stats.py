@@ -6,7 +6,7 @@ Produces three panels:
   Panel C: Simulated datasets (one row per DGP)
 
 Statistics are in raw percentage returns (RF not subtracted). Ken French missing-value
-sentinels (-99.99) are replaced with NaN. Simulated datasets are in decimals internally
+codes (-99.99, -999) are replaced with NaN. Simulated datasets are in decimals internally
 and multiplied by 100 for display consistency with Panels A and B.
 
 Entry point:
@@ -20,11 +20,10 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from data_input import load_kenneth_french_portfolios
+from data_input import load_portfolios
 from simulated_datasets import (
     simulate_iid,
     simulate_mean_reverting_factor,
@@ -40,12 +39,6 @@ from simulated_datasets import (
 
 DATASETS_DIR = Path(__file__).resolve().parent.parent.parent / "datasets"
 
-VW_MARKER = "Average Value Weighted Returns -- Daily"
-EW_MARKER = "Average Equal Weighted Returns -- Daily"
-FIRMS_MARKER = "Number of Firms in Portfolios"
-
-MISSING_SENTINEL = -99.99  # Ken French fill value for missing observations
-
 # ---------------------------------------------------------------------------
 # Portfolio configuration
 # ---------------------------------------------------------------------------
@@ -56,9 +49,6 @@ class PortfolioConfig:
     name: str  # Long name used in the table
     label: str  # Short label (e.g. "ind")
     path: Path
-    # end markers control which block load_kenneth_french_portfolios extracts
-    vw_end_marker: str = EW_MARKER  # ends value-weighted block
-    ew_end_marker: str | None = None  # None → read to EOF
 
 
 PORTFOLIO_CONFIGS: list[PortfolioConfig] = [
@@ -96,8 +86,6 @@ PORTFOLIO_CONFIGS: list[PortfolioConfig] = [
         name="Size and book-to-market",
         label="size-beme",
         path=DATASETS_DIR / "6_Portfolios_size_btm.csv",
-        # has extra sections after EW block; must stop before them
-        ew_end_marker=FIRMS_MARKER,
     ),
     PortfolioConfig(
         name="Size and long-term reversal",
@@ -127,45 +115,13 @@ def load_raw_pct(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> pd.DataFrame:
-    """
-    Load one block (value- or equal-weighted) in raw percentage terms.
+    """Load one block (value- or equal-weighted) in raw percentage terms.
 
-    load_kenneth_french_portfolios divides by 100 internally; we multiply
-    back so that statistics are in percent (matching the paper's table).
-    Missing-value sentinels (-99.99) are replaced with NaN before any
-    computation.
+    Missing-value codes (-99.99, -999) are NaN (handled in data_input).
     """
-    if weighting == "value":
-        start_marker = VW_MARKER
-        end_marker = config.vw_end_marker
-    elif weighting == "equal":
-        start_marker = EW_MARKER
-        end_marker = config.ew_end_marker
-    else:
-        raise ValueError(
-            f"weighting must be 'value' or 'equal', got {weighting!r}"
-        )
-
-    df = load_kenneth_french_portfolios(
-        path=config.path,
-        start_marker=start_marker,
-        end_marker=end_marker,
+    return load_portfolios(
+        config.path, weighting, start_date, end_date, percent=True
     )
-
-    ret_cols = [c for c in df.columns if c != "Date"]
-
-    # Restore to percent (load_kenneth_french_portfolios divides by 100)
-    df[ret_cols] = df[ret_cols] * 100
-
-    # Replace Ken French missing-value sentinel
-    df[ret_cols] = df[ret_cols].replace(MISSING_SENTINEL, np.nan)
-
-    if start_date is not None:
-        df = df[df["Date"] >= pd.Timestamp(start_date)]
-    if end_date is not None:
-        df = df[df["Date"] <= pd.Timestamp(end_date)]
-
-    return df.reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------

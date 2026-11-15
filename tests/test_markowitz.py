@@ -16,6 +16,35 @@ from markowitz import (
 
 
 def _random_spd(rng: np.random.Generator, n: int) -> np.ndarray:
+    """Random well-conditioned covariance matrix.
+
+    A @ A.T alone is already positive definite (almost surely), so the n * I
+    is not for PD. It shifts every eigenvalue up by n, so the smallest is >= n
+    while the largest is ~4n: condition number <= ~5 for any n and seed.
+    With a tiny shift an unlucky seed gives a near-singular Sigma, and the
+    tests would fail from rounding (inv vs solve beyond allclose tolerance,
+    SLSQP not converging) rather than from a bug.
+
+    Why this doesn't make the tests unrealistic, although real Sigmas are
+    ill-conditioned (condition number up to ~4e6 in the FYP runs):
+
+    1. The tests check the code's logic: the right formula (Sigma^-1 mu /
+       theta), theta passed through, the right rows. That logic doesn't depend
+       on Sigma; if it is right on a well-conditioned Sigma, it is right on
+       an ill-conditioned one.
+    2. Ill-conditioned matrices are bad for testing that logic: on them EVERY
+       way of computing Sigma^-1 mu (including the test's reference) is only
+       accurate to ~cond * 1e-16, so a failure could be two valid
+       approximations disagreeing, not a bug. Well-conditioned inputs make
+       every failure a real bug.
+    3. The accuracy on real Sigmas is a property of NumPy/LAPACK, not of our
+       code, and it is small: ~4e6 * 1e-16 = ~4e-10 relative error at the worst
+       FYP condition number. Long-only: 0 optimiser failures in ~2.4M FYP rows.
+
+    Huge weights from ill-conditioned Sigmas are an estimation issue, not a
+    Markowitz one (REFACTOR_PLAN 2.1). The exactly singular case is tested
+    separately (test_singular_sigma_row_is_nan_with_warning).
+    """
     A = rng.normal(size=(n, n))
     return A @ A.T + n * np.eye(n)
 

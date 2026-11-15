@@ -65,7 +65,7 @@ All of `src/*.py` + `src/necessity_alternative_methods/` → `src/possibilistic_
 | `pipeline_wrapper.py` | L28 | L26 `markowitz`, L31 `bayesian_averaging`, L32 `possibilistic_bayesian`, L33 `alternative_investment_rules`, L42 `data_input` | L548 `../datasets/simulated`; L601, L662 `parent.parent / "results"`; L607–617 ten `../datasets/*.csv`; L621 RF path |
 | `evaluation_pipeline.py` | L37 | L39 `distribution_evaluation_functions`, L44 `portfolio_evaluation_functions`, L385 `data_input` (inside `__main__`) | L387 results dir; L389 datasets dir |
 | `table1_summary_stats.py` | L26 | L27 `data_input`, L28 `simulated_datasets` | L41 `DATASETS_DIR`; L247 `SIM_DATA_DIR`; L459 `table1.tex` output into `src/` |
-| `data_input.py` | — | — | L27–35 `DATA_PATH`, `RISK_FREE_RATE_PATH` (`../../datasets`) |
+| `data_input.py` | — | — | — (paths moved to `config.py` in 2.2) |
 | `bayesian_averaging.py` | — | L45 `data_input`, L49 `markowitz` | — |
 | `possibilistic_bayesian.py` | — | L30 `data_input`, L34 `faster_necessity`, L40 `markowitz` | — |
 | `alternative_investment_rules.py` | — | L28 `markowitz` | — |
@@ -110,18 +110,21 @@ Decisions:
 - [x] `inv(Σ) @ μ` → `solve(Σ, μ)`: **not changed** (exact snapshot).
 - [x] Docstring: unconstrained weights don't sum to 1 (rest in risk-free); long-only does.
 
-### 2.2 `data_input.py` (305 lines) — [x] tests drafted 2026-11-13
-Tests (`tests/test_data_input.py`, 12 passing; fake French + FF files in the real layout): YYYYMMDD parsing, VW block (sorted, % → decimal), EW block to copyright, EW block stopping at an explicit end marker, RF file (keeps RF + Mkt-RF), excess returns (RF subtracted from portfolios but not from Mkt-RF), inner join on dates, inclusive date slicing, wrapper == manual chain, `prepare_returns` drops only Date/RF, real 10-Industry file loads cleanly (skipped if `../datasets` missing).
+### 2.2 `data_input.py` — [x] rewritten 2026-11-15 (not committed), 305 → 175 lines
+Rewrite: every table in the French / FF files has the same shape (title line, header starting with `,`, date rows), checked on all 11 files. One reader finds tables by that shape, so markers, the read-to-EOF branch, the `except` fallback and `skiprows=4` are gone.
+New API: `read_french_tables(path)` (all tables by title, percent) · `load_portfolios(path, weighting, start, end, percent=False)` · `load_risk_free(path, start, end, percent=False)` (both loaders convert units through one helper `_from_percent`) · `load_excess_returns(ports, rf, weighting, start, end)` · `prepare_returns` (unchanged). Removed: `load_kenneth_french_portfolios`, `load_risk_free_rate`, `calculate_excess_returns`, `slice_timeframe`, `load_excess_returns_from_kenneth_french_path`, `_read_csv_block_between_markers`, the `__main__` demo.
+Output unchanged: all 10 real files × VW/EW + RF bit-for-bit identical to the old loader; snapshot test green; `make_snapshots.py` still runs on FYP `dev` (falls back to the old API).
+Callers updated: `pipeline_wrapper` (loops `weighting in ("value", "equal")`; `(path, end_marker)` tuples and marker constants gone), `table1_summary_stats.load_raw_pct` (uses `load_portfolios(percent=True)`; its markers, end-marker config fields, ×100 and sentinel code gone), `evaluation_pipeline` `__main__`, `bayesian_averaging.main`, `possibilistic_bayesian.test_run_core`, `make_snapshots.py`.
 
-Checked on all 10 real files (VW + EW, from 1980): no duplicate dates, no NaN, no `-99.99` codes, RF and portfolio dates match exactly.
+Tests (`tests/test_data_input.py`, 31 passing): YYYYMMDD parsing, tables found by title (untitled FF table → `""`), Excel comma padding, `-99.99` / `-999` → NaN, VW block (sorted, % → decimal), EW block stops before copyright, extra tables after EW not read, `percent=True` gives the same units for portfolios and RF, missing table → clear error, bad weighting rejected, RF file, RF header length doesn't matter, excess returns (RF not subtracted from Mkt-RF), days without RF dropped with a warning / error above 1% / no warning when files match, inclusive date window, `prepare_returns` drops only Date/RF, **all 10 real files load both blocks cleanly** (and without warnings), `Other` kept.
 
 Edge-case notes:
-- [?] `-99.99` missing-value code would become a return of -0.9999 (not NaN). Not present in any file after 1980; `table1_summary_stats` handles it, `data_input` doesn't.
-- [?] EW block with `end_marker=None` reads until a ` -- ` line or "Copyright". A following table without ` -- ` (e.g. "Number of Firms in Portfolios" in `6_Portfolios_size_btm`) would be read as returns. Handled today by the special case in `pipeline_wrapper.main`; a new file with extra tables would silently break.
-- [?] Wrong/missing marker → `except Exception` falls back to `pd.read_csv(whole file)` → confusing `ParserError` instead of "marker not found".
-- [?] Inner join silently drops dates missing from the RF file (none today).
-- [?] `load_risk_free_rate` hard-codes `skiprows=4`.
-- [ ] Module-level `DATA_PATH` / `RISK_FREE_RATE_PATH` → `config.py`.
+- [x] `-99.99` (and `-999`, also listed in the file headers) → NaN, in one place (`read_french_tables`), compared in percent before dividing (table1's old ×100 round trip could miss it). None in the current data.
+- [x] Extra tables after the EW block ("Number of Firms in Portfolios", "Average Firm Size" in `6_Portfolios_size_btm`) are never read; no special case needed. A new file with extra tables can't break it.
+- [x] Wrong / missing table → `ValueError` naming the title and listing the tables found (was: silent empty data or confusing `ParserError`).
+- [x] `skiprows=4` gone: the FF header row is found by its shape.
+- [x] `DATA_PATH` / `RISK_FREE_RATE_PATH` → new `src/config.py` (`DATASETS_DIR`, `RF_PATH`); other constants follow in Part 1.
+- [x] Portfolio days with no RF: still dropped (inner join), now with a warning (count + first dates); more than 1% missing → `ValueError` (files probably don't belong together, e.g. monthly vs daily). 0 missing in the real data.
 
 ### 2.3 `portfolio_evaluation_functions.py` — [x] tests drafted 2026-11-13
 Tests (`tests/test_portfolio_evaluation_functions.py`, 16 passing + 2 xfail = logged bugs): weights at t × returns at t+1, NaN rows kept/dropped, column alignment by name, Sharpe = mean/std and √scaling, rolling Sharpe last window + warm-up NaNs, CE formula with/without RF and RF as DataFrame, turnover on constant weights; Sharpe-difference test: Newey-West(0 lags) = sample cov, symmetric, point estimates, detects clear outperformance, antisymmetric t, common-index alignment, too-few-obs error, `compare_to_benchmark` one row per strategy.
@@ -193,9 +196,9 @@ Edge-case notes:
 - [ ] L830 `test_run_core` (needs real data, not a pytest test) → rename or delete in Part 1.
 
 ### 2.10 `pipeline_wrapper.py` — [x] tests drafted 2026-11-13
-Tests (`tests/test_pipeline_wrapper.py`, 8 passing + 1 xfail; the per-dataset run is stubbed for loop tests): real-data loop runs VW then EW per file with names `<stem>_value_weighted` / `_equal_weighted`, excess returns + `Mkt-RF` reach the run, parameters are passed through, end-marker override (`6_Portfolios_size_btm` case), start/end date window; simulated loop runs each DGP on `Asset*` columns and copies `rf.csv`, skips missing files with a warning; `_save_algo_outputs` file names; **per-dataset run writes exactly the expected file set** (with and without `Mkt-RF`; necessity bypassed) and `returns.csv` round-trips.
+Tests (`tests/test_pipeline_wrapper.py`, 9 passing; the per-dataset run is stubbed for loop tests): real-data loop runs VW then EW per file with names `<stem>_value_weighted` / `_equal_weighted`, excess returns + `Mkt-RF` reach the run, parameters are passed through, extra tables ignored (`6_Portfolios_size_btm` case), unreadable file skipped with a warning, start/end date window; simulated loop runs each DGP on `Asset*` columns and copies `rf.csv`, skips missing files with a warning; `_save_algo_outputs` file names; **per-dataset run writes exactly the expected file set** (with and without `Mkt-RF`; necessity bypassed) and `returns.csv` round-trips.
 Numbers are covered by `tests/test_snapshots.py`.
-Bug (TOOLING_TODO, xfail): file without markers silently loads as empty data and gets run. Existing: `device="cuda"` in both `main()`s; real-data runs don't save `rf.csv`.
+~~Bug: file without markers silently loads as empty data and gets run~~ — fixed in 2.2 (2026-11-15), xfail removed. Existing: `device="cuda"` in both `main()`s; real-data runs don't save `rf.csv`.
 
 Edge-case notes:
 - [?] `sys.path.insert` at import time (goes away with the package move).
@@ -217,7 +220,7 @@ Edge-case notes:
 `tests/test_plot_weight_distributions.py` (3 passing): pooling across folders drops NaN and ignores other strategies/files, boxplot quartiles / whiskers / fliers, plot writes a PNG (output path redirected to a temp dir).
 
 Edge-case notes:
-- [?] French file headers say missing data is `-99.99` **or `-999.`**; neither `data_input` nor `table1` handles `-999.` (not present in current data; `-99.99` isn't either — only in header text).
+- [x] French file headers say missing data is `-99.99` **or `-999.`** → both handled in `data_input` since 2.2 (2026-11-15); `table1` uses it.
 - [?] `load_sim_pct` / `build_sim_panel` / `generate_and_save_sim_datasets` default `T=6000` (stale; data is T=10000, N=10) → `config.py`.
 - [?] `plot_weight_distributions.RESULTS_DIR` points at the non-existent `results/`; `OUTPUT_PATH` writes into `src/` → `config.py` / `figures/` (0.6).
 - [?] Plot `STRATEGIES` only covers Bayesian + 3 possibilistic, though `GROUP_COLOURS` lists benchmark / frequentist / shrinkage groups too.

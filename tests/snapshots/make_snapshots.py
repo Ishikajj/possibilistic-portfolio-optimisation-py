@@ -82,25 +82,37 @@ def build(src: Path, bypass_necessity: bool = False) -> dict[str, np.ndarray]:
     # --- data_input, end to end on one real file (both blocks) -------------
     industry = DATASETS_DIR / "10_Industry_Portfolios_Daily.csv"
     rf_path = DATASETS_DIR / "F-F_Research_Data_Factors_daily.csv"
+    new_api = hasattr(data_input, "load_excess_returns")  # False on FYP `dev`
     loaded = {}
-    for name, start, end in [("vw", VW, EW), ("ew", EW, None)]:
-        excess = data_input.load_excess_returns_from_kenneth_french_path(
-            portfolios_path=industry,
-            risk_free_path=rf_path,
-            start_date=START_DATE,
-            start_marker=start,
-            end_marker=end,
-        )
+    for name, weighting, start, end in [
+        ("vw", "value", VW, EW),
+        ("ew", "equal", EW, None),
+    ]:
+        if new_api:
+            excess = data_input.load_excess_returns(
+                industry, rf_path, weighting, start_date=START_DATE
+            )
+        else:
+            excess = data_input.load_excess_returns_from_kenneth_french_path(
+                portfolios_path=industry,
+                risk_free_path=rf_path,
+                start_date=START_DATE,
+                start_marker=start,
+                end_marker=end,
+            )
         out[f"data_input__{name}__dates"] = (
             excess["Date"].dt.strftime("%Y%m%d").astype(int).to_numpy()
         )
         prepared = data_input.prepare_returns(excess)
         _frame_to_arrays(f"data_input__{name}", prepared, out)
         loaded[name] = prepared
-    rf_df = data_input.load_risk_free_rate(rf_path)
-    global_rf = data_input.slice_timeframe(rf_df, START_DATE, None)[
-        "RF"
-    ].reset_index(drop=True)
+    if new_api:
+        global_rf = data_input.load_risk_free(rf_path, START_DATE)["RF"]
+    else:
+        rf_df = data_input.load_risk_free_rate(rf_path)
+        global_rf = data_input.slice_timeframe(rf_df, START_DATE, None)[
+            "RF"
+        ].reset_index(drop=True)
     out["data_input__rf"] = global_rf.to_numpy(dtype=float)
 
     # --- the two pipeline slices --------------------------------------------

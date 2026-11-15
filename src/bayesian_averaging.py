@@ -42,10 +42,8 @@ import pandas as pd
 from numpy.linalg import slogdet
 from scipy.special import multigammaln
 
-from data_input import (
-    load_excess_returns_from_kenneth_french_path,
-    prepare_returns,
-)
+from config import DATASETS_DIR, RF_PATH
+from data_input import load_excess_returns, prepare_returns
 from markowitz import markowitz_unconstrained
 
 
@@ -441,7 +439,11 @@ def run_core(
 
 def main() -> None:
     df = prepare_returns(
-        load_excess_returns_from_kenneth_french_path(start_date="2020-01-01")
+        load_excess_returns(
+            DATASETS_DIR / "10_Industry_Portfolios_Daily.csv",
+            RF_PATH,
+            start_date="2020-01-01",
+        )
     )
     predictives, weights = run_core(df, burn_in=100)
     print(predictives["mu_hat"])

@@ -7,8 +7,9 @@ import pandas as pd
 import pytest
 
 import table1_summary_stats as t1
+from data_input import TABLE_TITLES
 
-VW, EW = t1.VW_MARKER, t1.EW_MARKER
+VW, EW = TABLE_TITLES["value"], TABLE_TITLES["equal"]
 
 
 @pytest.fixture

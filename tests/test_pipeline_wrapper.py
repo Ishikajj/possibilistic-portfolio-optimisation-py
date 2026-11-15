@@ -89,10 +89,10 @@ def test_real_loop_runs_value_and_equal_weighted_per_file(recorder, tmp_path):
     )
 
 
-def test_real_loop_respects_end_marker_override(recorder, tmp_path):
+def test_real_loop_ignores_extra_tables(recorder, tmp_path):
     f = _french_file(tmp_path / "6_btm.csv", extra_table=True)
     pw.call_all_datasets(
-        [(f, "Number of Firms in Portfolios")],
+        [f],
         risk_free_path=_ff_file(tmp_path / "ff.csv"),
         start_date=None,
         output_dir=tmp_path / "out",
@@ -114,10 +114,6 @@ def test_real_loop_applies_date_window(recorder, tmp_path):
     assert len(recorder[0]["data"]) == 3
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="TOOLING_TODO bug: file without markers silently loads as an empty DataFrame",
-)
 def test_real_loop_skips_unreadable_file(recorder, tmp_path, capsys):
     bad = tmp_path / "bad.csv"
     bad.write_text("not, a\nfrench, file\n")

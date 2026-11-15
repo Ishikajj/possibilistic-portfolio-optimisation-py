@@ -382,21 +382,14 @@ def run_evaluation(
 
 
 if __name__ == "__main__":
-    from data_input import load_risk_free_rate, slice_timeframe
+    from config import RF_PATH
+    from data_input import load_risk_free
 
     RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
-    RISK_FREE_PATH = (
-        Path(__file__).resolve().parent.parent.parent
-        / "datasets"
-        / "F-F_Research_Data_Factors_daily.csv"
-    )
     START_DATE = "1980-01-01"
 
     # Load global RF series (for KF datasets that don't have their own rf.csv)
-    rf_df = load_risk_free_rate(RISK_FREE_PATH)
-    global_rf = slice_timeframe(rf_df, START_DATE, None)["RF"].reset_index(
-        drop=True
-    )
+    global_rf = load_risk_free(RF_PATH, START_DATE)["RF"]
 
     for folder in sorted(RESULTS_DIR.iterdir()):
         if not folder.is_dir():

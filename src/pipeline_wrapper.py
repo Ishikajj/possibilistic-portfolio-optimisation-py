@@ -39,18 +39,8 @@ from alternative_investment_rules import (
     minimum_variance_strategy,
     rolling_window_weights,
 )
-from data_input import (
-    RISK_FREE_RATE_PATH,
-    load_excess_returns_from_kenneth_french_path,
-    prepare_returns,
-)
-
-# ── Kenneth French marker strings ────────────────────────────────────────────
-_VW_START = "Average Value Weighted Returns -- Daily"
-_VW_END = "Average Equal Weighted Returns -- Daily"
-_EW_START = "Average Equal Weighted Returns -- Daily"
-# The EW block runs to EOF (only a copyright line follows), so no end marker.
-
+from config import RF_PATH
+from data_input import load_excess_returns, prepare_returns
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -341,8 +331,8 @@ def calculate_all_functions_perdatasets(
 
 
 def call_all_datasets(
-    portfolios_paths: list[Path | str | tuple[Path | str, str | None]],
-    risk_free_path: Path | str = RISK_FREE_RATE_PATH,
+    portfolios_paths: list[Path | str],
+    risk_free_path: Path | str = RF_PATH,
     start_date: str | None = "1963-01-01",
     end_date: str | None = None,
     output_dir: Path | str | None = None,
@@ -361,17 +351,10 @@ def call_all_datasets(
 ) -> list[Path]:
     """Run the full pipeline on every Kenneth French dataset in two passes.
 
-    For each path in ``portfolios_paths`` the file is read twice:
-
-      Pass 1 — Value-weighted block
-        start marker : "Average Value Weighted Returns -- Daily"
-        end   marker : "Average Equal Weighted Returns -- Daily"
-        folder name  : ``<stem>_value_weighted``
-
-      Pass 2 — Equal-weighted block
-        start marker : "Average Equal Weighted Returns -- Daily"
-        end   marker : (EOF — the EW section runs to the end of the file)
-        folder name  : ``<stem>_equal_weighted``
+    For each path in ``portfolios_paths`` the file is read twice: the
+    value-weighted block (folder ``<stem>_value_weighted``), then the
+    equal-weighted block (folder ``<stem>_equal_weighted``). Other tables in
+    the file (e.g. "Number of Firms in Portfolios") are ignored.
 
     In both passes the excess-returns preparation (subtract RF, slice dates,
     drop non-numeric columns) is applied before handing the data to
@@ -400,33 +383,24 @@ def call_all_datasets(
     """
     output_folders: list[Path] = []
 
-    for entry in portfolios_paths:
-        if isinstance(entry, tuple):
-            raw_path, ew_end_override = entry
-        else:
-            raw_path = entry
-            ew_end_override = None
+    for raw_path in portfolios_paths:
         p = Path(raw_path)
         stem = p.stem  # e.g. "12_Industry_Portfolios_Daily"
 
-        for weighting, start_marker, end_marker in [
-            ("value_weighted", _VW_START, _VW_END),
-            ("equal_weighted", _EW_START, ew_end_override),
-        ]:
-            dataset_name = f"{stem}_{weighting}"
+        for weighting in ("value", "equal"):
+            dataset_name = f"{stem}_{weighting}_weighted"
             print(f"\n{'=' * 60}")
             print(f"Dataset : {dataset_name}")
             print(f"File    : {p.name}")
             print(f"{'=' * 60}")
 
             try:
-                excess_df = load_excess_returns_from_kenneth_french_path(
+                excess_df = load_excess_returns(
                     portfolios_path=p,
                     risk_free_path=risk_free_path,
+                    weighting=weighting,
                     start_date=start_date,
                     end_date=end_date,
-                    start_marker=start_marker,
-                    end_marker=end_marker,
                 )
             except Exception as exc:
                 print(
@@ -613,10 +587,7 @@ def main():
         "../datasets/10_Portfolios_Formed_on_booktomarket.csv",
         "../datasets/10_Portfolios_Formed_on_ME_size.csv",
         "../datasets/6_Portfolios_size_ltr.csv",
-        (
-            "../datasets/6_Portfolios_size_btm.csv",
-            "Number of Firms in Portfolios",
-        ),
+        "../datasets/6_Portfolios_size_btm.csv",
     ]
     risk_free_path = "../datasets/F-F_Research_Data_Factors_daily.csv"
 

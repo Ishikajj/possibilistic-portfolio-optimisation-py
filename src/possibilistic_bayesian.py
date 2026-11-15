@@ -27,10 +27,8 @@ import numpy as np
 import pandas as pd
 from numpy.linalg import slogdet
 
-from data_input import (
-    load_excess_returns_from_kenneth_french_path,
-    prepare_returns,
-)
+from config import DATASETS_DIR, RF_PATH
+from data_input import load_excess_returns, prepare_returns
 from faster_necessity import (
     deterministic_mask_weighting,
     exponential_penalty_weighting,
@@ -830,7 +828,11 @@ def run_core(
 def test_run_core() -> tuple[pd.DataFrame, tuple]:
     """Run a minimal smoke test of run_core on a short return sample."""
     df = prepare_returns(
-        load_excess_returns_from_kenneth_french_path(start_date="2000-01-01")
+        load_excess_returns(
+            DATASETS_DIR / "10_Industry_Portfolios_Daily.csv",
+            RF_PATH,
+            start_date="2000-01-01",
+        )
     )
     df_small = df.iloc[:150].copy()
 
