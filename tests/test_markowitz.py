@@ -1,11 +1,13 @@
 """Tests for markowitz.py — unconstrained (closed form) and long-only (SLSQP) weights."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
 
+import markowitz
 from markowitz import (
-    compute_weights_array_long_only,
     markowitz_long_only,
     markowitz_step,
     markowitz_step_long_only,
@@ -73,9 +75,8 @@ def test_long_only_array_matches_single_steps():
     # The array version warm-starts; it must still find the same optimum.
     T, n, first = 8, 3, 2
     pred = _predictives(T, n)
-    arr = compute_weights_array_long_only(
-        pred["mu_hat"], pred["sigma_hat"], 1, 1, theta=2.0
-    )
+    w = markowitz_long_only(pred, pd.DataFrame(np.zeros((T, n))), 1, 1, 2.0)
+    arr = w.to_numpy()
     steps = [
         markowitz_step_long_only(pred["mu_hat"][t], pred["sigma_hat"][t], 2.0)
         for t in range(first, T - 1)
@@ -123,6 +124,7 @@ def test_nan_mu_row_stays_nan(entry):
 
 @pytest.mark.parametrize("entry", ENTRY_POINTS)
 def test_too_short_series_is_all_nan(entry):
+    """First investable row is the last row -> empty loop, all NaN, no crash."""
     T, n = 3, 2  # first investable row (1 + 1 = 2) is the last row -> nothing
     w = entry(_predictives(T, n), pd.DataFrame(np.zeros((T, n))), 1, 1)
     assert w.isna().all().all()
@@ -135,3 +137,57 @@ def test_unconstrained_matches_step_on_every_row():
     for t in range(2, T - 1):
         expected = markowitz_step(pred["mu_hat"][t], pred["sigma_hat"][t], 3.0)
         assert np.allclose(w.iloc[t], expected)
+
+
+# --- bad rows and bad inputs ----------------------------------------------
+
+
+def test_singular_sigma_row_is_nan_with_warning():
+    T, n = 8, 2
+    pred = _predictives(T, n)
+    pred["sigma_hat"][4] = np.zeros((n, n))  # inv() raises LinAlgError
+    with pytest.warns(RuntimeWarning, match="singular Sigma: 1"):
+        w = markowitz_unconstrained(pred, pd.DataFrame(np.zeros((T, n))), 1, 1)
+    assert w.iloc[4].isna().all()
+    assert w.iloc[[3, 5]].notna().all().all()
+
+
+@pytest.mark.parametrize("theta", [0.0, -1.0])
+@pytest.mark.parametrize("entry", ENTRY_POINTS)
+def test_nonpositive_theta_raises(entry, theta):
+    T, n = 6, 2
+    with pytest.raises(ValueError, match="theta"):
+        entry(_predictives(T, n), pd.DataFrame(np.zeros((T, n))), 1, 1, theta)
+
+
+def test_long_only_failure_is_nan_and_keeps_warm_start(monkeypatch):
+    # Make the 2nd optimisation fail; the 3rd must start from the 1st's answer.
+    T, n = 8, 3
+    pred = _predictives(T, n)
+    real_step = markowitz.markowitz_step_long_only
+    starts, results = [], []
+
+    def flaky_step(mu_t, sigma_t, theta, w0):
+        starts.append(w0.copy())
+        w = real_step(mu_t, sigma_t, theta, w0=w0)
+        if len(starts) == 2:
+            w = np.full(n, np.nan)
+        results.append(w)
+        return w
+
+    monkeypatch.setattr(markowitz, "markowitz_step_long_only", flaky_step)
+    with pytest.warns(RuntimeWarning, match="optimiser failed: 1"):
+        w = markowitz_long_only(pred, pd.DataFrame(np.zeros((T, n))), 1, 1)
+
+    assert w.iloc[3].isna().all()  # rows start at 2, so the 2nd call is row 3
+    assert w.iloc[[2, 4]].notna().all().all()
+    assert np.array_equal(starts[2], results[0])
+
+
+def test_clean_run_gives_no_warning():
+    T, n = 8, 2
+    df = pd.DataFrame(np.zeros((T, n)))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any warning fails the test
+        markowitz_unconstrained(_predictives(T, n), df, 1, 1)
+        markowitz_long_only(_predictives(T, n), df, 1, 1)

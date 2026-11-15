@@ -5,12 +5,12 @@ Two variants:
 Unconstrained — closed-form solution, allows short selling:
   markowitz_step            — single time step, returns weight vector
   compute_weights_array     — full time series, returns (T, n) array
+                              (shared by both variants: long_only=True/False)
   markowitz_unconstrained   — entry point: mu_sigma_dict + returns_df → weights DataFrame
 
 Long-only — SLSQP constrained optimisation, no short selling:
-  markowitz_step_long_only       — single time step, warm-start optional
-  compute_weights_array_long_only — full time series with warm-starting
-  markowitz_long_only             — entry point: mu_sigma_dict + returns_df → weights DataFrame
+  markowitz_step_long_only  — single time step, optional warm start w0
+  markowitz_long_only       — entry point: mu_sigma_dict + returns_df → weights DataFrame
 
 Both entry points take:
   mu_sigma_dict : {"mu_hat": ndarray (T, n), "sigma_hat": ndarray (T, n, n)}
@@ -18,11 +18,16 @@ Both entry points take:
   burn_in, periods_until_investment : first valid weight at burn_in + periods_until_investment
   theta         : risk-aversion scalar (default 1.0)
 
+Unconstrained weights don't sum to 1 by design: the remainder (1 - sum(w))
+sits in the risk-free asset. Long-only weights sum to 1 (fully invested).
+
 Weights at index t are intended to be applied to returns at t+1 (lag handled upstream).
 Last row is always NaN — predictions at T-1 have no subsequent return to invest in.
 """
 
 from __future__ import annotations
+
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -40,39 +45,22 @@ def markowitz_step(
     return w
 
 
-def compute_weights_array(
-    mu_hat: np.ndarray,
-    sigma_hat: np.ndarray,
-    burn_in: int,
-    periods_until_investment: int,
-    theta: float,
-) -> np.ndarray:
-    """Compute weights array across time."""
-    T, n = mu_hat.shape
-    weights = np.full((T, n), np.nan)
-
-    # we compute weights for until T-1 only since the predictions we receive contain info upto time T.
-    for t in range(burn_in + periods_until_investment, T - 1):
-        if np.isnan(mu_hat[t]).any():
-            continue
-        weights[t] = markowitz_step(mu_hat[t], sigma_hat[t], theta)
-
-    return weights
-
-
 def markowitz_step_long_only(
     mu_t: np.ndarray,
     sigma_t: np.ndarray,
     theta: float = 1.0,
+    w0: np.ndarray | None = None,
 ) -> np.ndarray:
     """Compute long-only Markowitz weights at one time step.
 
     Solves: max  mu^T w - (theta/2) w^T Sigma w
             s.t. sum(w) = 1,  w_i >= 0
+    w0 is the optimiser's starting point (default 1/N).
     Returns NaN vector if optimisation fails.
     """
     n = len(mu_t)
-    w0 = np.ones(n) / n
+    if w0 is None:
+        w0 = np.ones(n) / n
 
     def neg_utility(w: np.ndarray) -> float:
         return float(-mu_t @ w + (theta / 2.0) * w @ sigma_t @ w)
@@ -93,40 +81,57 @@ def markowitz_step_long_only(
     return result.x if result.success else np.full(n, np.nan)
 
 
-def compute_weights_array_long_only(
+def compute_weights_array(
     mu_hat: np.ndarray,
     sigma_hat: np.ndarray,
     burn_in: int,
     periods_until_investment: int,
     theta: float,
+    long_only: bool = False,
 ) -> np.ndarray:
-    """Compute long-only weights array across time, warm-starting from previous solution."""
+    """Compute weights array across time.
+
+    Rows from burn_in + periods_until_investment to T-2 are filled; the last
+    row has no following return to invest in. Rows with NaN mu are skipped.
+    Long-only warm-starts each step from the previous successful solution.
+
+    Rows that can't be computed (singular Sigma, long-only
+    optimiser failure) are left NaN, with one warning giving the counts.
+    """
+    if theta <= 0:
+        raise ValueError(f"theta (risk aversion) must be > 0, got {theta}")
+
     T, n = mu_hat.shape
     weights = np.full((T, n), np.nan)
-    w_prev = np.ones(n) / n  # fallback initial guess
+    w_prev = np.ones(n) / n  # long-only starting point
+    start = burn_in + periods_until_investment
+    skipped = {"singular Sigma": 0, "optimiser failed": 0}
 
-    for t in range(burn_in + periods_until_investment, T - 1):
+    for t in range(start, T - 1):
         if np.isnan(mu_hat[t]).any():
             continue
-
-        result = minimize(
-            lambda w: float(
-                -mu_hat[t] @ w + (theta / 2.0) * w @ sigma_hat[t] @ w
-            ),
-            w_prev,
-            jac=lambda w: -mu_hat[t] + theta * sigma_hat[t] @ w,
-            method="SLSQP",
-            bounds=[(0.0, None)] * n,
-            constraints={"type": "eq", "fun": lambda w: w.sum() - 1.0},
-            options={"ftol": 1e-9, "maxiter": 1000},
-        )
-
-        if result.success:
-            weights[t] = result.x
-            w_prev = result.x  # warm-start next period
+        if long_only:
+            w = markowitz_step_long_only(
+                mu_hat[t], sigma_hat[t], theta, w0=w_prev
+            )
+            if np.isnan(w).any():
+                skipped["optimiser failed"] += 1
+                continue  # keep w_prev so the next start is still sensible
+            weights[t] = w_prev = w
         else:
-            weights[t] = np.full(n, np.nan)
-            # keep w_prev unchanged so next period still has a sensible start
+            try:
+                weights[t] = markowitz_step(mu_hat[t], sigma_hat[t], theta)
+            except np.linalg.LinAlgError:
+                skipped["singular Sigma"] += 1
+
+    if sum(skipped.values()) > 0:
+        reasons = ", ".join(f"{k}: {v}" for k, v in skipped.items() if v)
+        warnings.warn(
+            f"markowitz: {sum(skipped.values())} of {max(T - 1 - start, 0)} "
+            f"investable rows left NaN ({reasons})",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     return weights
 
@@ -141,12 +146,13 @@ def markowitz_long_only(
     """Full pipeline: extract → long-only optimise → return DataFrame."""
     mu_hat, sigma_hat = mu_sigma_dict["mu_hat"], mu_sigma_dict["sigma_hat"]
 
-    weights_array = compute_weights_array_long_only(
+    weights_array = compute_weights_array(
         mu_hat=mu_hat,
         sigma_hat=sigma_hat,
         burn_in=burn_in,
         periods_until_investment=periods_until_investment,
         theta=theta,
+        long_only=True,
     )
 
     return pd.DataFrame(

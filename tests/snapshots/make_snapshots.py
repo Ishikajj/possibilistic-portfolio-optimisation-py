@@ -51,17 +51,24 @@ EW = "Average Equal Weighted Returns -- Daily"
 
 
 def _bypass_necessity(possibilistic_bayesian) -> None:
+    """Replace necessity scoring with all ones, so necessity is held constant
+    and has no effect on the possibilistic algorithm. Skips the heavy
+    computation (~30 s instead of ~80 min)."""
     possibilistic_bayesian.necessity_scores_fast = lambda y_next, mus, **kw: (
         np.ones(len(mus))
     )
 
 
 def _frame_to_arrays(prefix: str, df: pd.DataFrame, out: dict) -> None:
+    """Store a DataFrame as two arrays, since .npz only holds plain arrays:
+    the values, and the column names (which .to_numpy() drops)."""
     out[prefix] = df.to_numpy(dtype=float)
     out[prefix + "__cols"] = np.array([str(c) for c in df.columns])
 
 
 def build(src: Path, bypass_necessity: bool = False) -> dict[str, np.ndarray]:
+    """Load the data, run the full pipeline + evaluation on the `real` and
+    `sim` slices, and collect every output into one dict of arrays."""
     sys.path.insert(0, str(src.resolve()))
     import data_input
     import evaluation_pipeline
@@ -128,6 +135,8 @@ def build(src: Path, bypass_necessity: bool = False) -> dict[str, np.ndarray]:
 
 
 def compare(new: dict, ref_path: Path) -> bool:
+    """Check a `build` result against a saved reference, key by key.
+    Exact match only (NaN == NaN); prints what differs."""
     ref = dict(np.load(ref_path))
     ok = True
     for k in sorted(set(ref) | set(new)):
