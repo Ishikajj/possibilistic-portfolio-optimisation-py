@@ -1,16 +1,20 @@
 """Portfolio performance metrics computed from weights and excess returns.
 
-Inputs: weights_df (T, n) and returns_df (T, n) — weights at t applied to returns at t+1.
+Inputs: weights_df (T, n) and returns_df (T, n) of excess returns. Weights at
+t are decided with data up to t and earn the returns at t+1. Metrics are
+daily unless ``scaling_factor`` is given (252 = annualised: Sharpe × √252,
+turnover × 252). The pipeline passes ``config.SCALING_FACTOR``.
 
 portfolio_returns       — return series implied by weights and returns.
 calculate_sharpe_ratio  — scalar Sharpe, optionally annualised.
 rolling_sharpe_ratio    — rolling Sharpe time series, optionally annualised.
-certainty_equivalent    — mean-variance utility scalar, requires rf_series.
-average_turnover        — mean daily sum of absolute weight changes.
-sharpe_difference_test — GMM / Newey-West test of a Sharpe-ratio difference (untested, see TOOLING_TODO).
-compare_to_benchmark   — sharpe_difference_test for several strategies vs one benchmark.
+certainty_equivalent    — mean-variance certainty equivalent (needs RF).
+average_turnover        — mean daily sum of absolute weight changes, optionally annualised.
+sharpe_difference_test  — GMM / Newey-West test of a Sharpe-ratio difference.
+compare_to_benchmark    — sharpe_difference_test for several strategies vs one benchmark.
 """
 
+import warnings
 from typing import NamedTuple
 
 import numpy as np
@@ -22,34 +26,18 @@ def portfolio_returns(
     returns_df: pd.DataFrame,
     weights_df: pd.DataFrame,
     *,
-    lag: int = 1,
     dropna: bool = True,
 ) -> pd.Series:
-    """Compute the portfolio return series implied by weights and asset returns.
+    """Portfolio return series: weights decided at t earn the returns at t+1.
 
-    Convention: weights at index t are applied to returns at index t+lag.
-
-    Returns:
-        pd.Series of portfolio returns inno dexed like `weights_df`.
+    Returns are matched to the weights by index label and column name. The
+    output is indexed by the return period (t+1); with ``dropna=True``
+    periods without a weight are dropped.
     """
-    assert isinstance(weights_df, pd.DataFrame)
-    assert isinstance(returns_df, pd.DataFrame)
-    assert isinstance(lag, int) and lag >= 0
-
-    # Align to weights index/columns (enforces same asset set and order)
     returns_aligned = returns_df.loc[weights_df.index, weights_df.columns]
-
-    # Shift weights so w_{t-1} multiplies r_t
-    shifted_weights = weights_df.shift(lag)
-
-    # Elementwise multiply and sum across assets.
-    # Use skipna=False so any NaN propagates.
-    port = (shifted_weights * returns_aligned).sum(axis=1, skipna=False)
-
-    if dropna:
-        port = port.dropna()
-
-    return port
+    # w_t moves to row t+1 so it multiplies r_{t+1}; any NaN propagates
+    port = (weights_df.shift(1) * returns_aligned).sum(axis=1, skipna=False)
+    return port.dropna() if dropna else port
 
 
 def calculate_sharpe_ratio(
@@ -57,26 +45,37 @@ def calculate_sharpe_ratio(
     weights_df: pd.DataFrame,
     scaling_factor: int | None = None,
 ) -> float:
-    """Compute daily Sharpe ratio from excess returns and weights."""
-    assert isinstance(weights_df, pd.DataFrame)
-    assert isinstance(returns_df, pd.DataFrame)
+    """Sharpe ratio: mean / sample std of the portfolio excess returns.
 
-    portfolio = portfolio_returns(returns_df, weights_df, lag=1, dropna=True)
+    Daily; with ``scaling_factor`` (e.g. 252) multiplied by √scaling_factor.
 
-    mean_ret: float = float(portfolio.mean())
-    std_ret: float = float(portfolio.std(ddof=1))
+    Undefined cases (fewer than 2 valid returns, or constant returns with
+    std = 0) return NaN with a RuntimeWarning giving the reason.
+    """
+    port = portfolio_returns(returns_df, weights_df)
 
-    if std_ret == 0.0:
-        return 0.0
+    if len(port) < 2:
+        warnings.warn(
+            f"sharpe: undefined with {len(port)} valid return(s); "
+            "returning NaN",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return float("nan")
 
-    sharpe_daily: float = mean_ret / std_ret
+    std = float(port.std(ddof=1))
+    if std == 0.0:
+        warnings.warn(
+            "sharpe: portfolio returns are constant (std = 0); returning NaN",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return float("nan")
 
+    sharpe_daily = float(port.mean()) / std
     if not scaling_factor:
-        return float(sharpe_daily)
-
-    sharpe_annualised: float = sharpe_daily * np.sqrt(scaling_factor)
-
-    return float(sharpe_annualised)
+        return sharpe_daily
+    return float(sharpe_daily * np.sqrt(scaling_factor))
 
 
 def rolling_sharpe_ratio(
@@ -86,80 +85,62 @@ def rolling_sharpe_ratio(
     scaling_factor: int | None = None,
     min_periods: int | None = None,
 ) -> pd.Series:
-    """Compute a rolling Sharpe ratio series from (excess) returns and weights.
+    """Rolling Sharpe ratio, indexed like ``portfolio_returns``.
 
-    Convention: weights at index t are applied to returns at index t+1.
+    Daily; with ``scaling_factor`` (e.g. 252) multiplied by √scaling_factor.
 
+    NaN where the window has fewer than ``min_periods`` returns (warm-up,
+    NaN weights; expected, no warning) or zero std (one RuntimeWarning
+    with the count).
     """
-    assert isinstance(weights_df, pd.DataFrame)
-    assert isinstance(returns_df, pd.DataFrame)
-    assert isinstance(window, int) and window > 0
-
+    if window <= 0:
+        raise ValueError(f"window must be > 0, got {window}")
     if min_periods is None:
         min_periods = window
-    assert isinstance(min_periods, int) and 1 <= min_periods <= window
+    if not 1 <= min_periods <= window:
+        raise ValueError(
+            f"min_periods must be in [1, window={window}], got {min_periods}"
+        )
 
-    portfolio = portfolio_returns(returns_df, weights_df, lag=1, dropna=False)
+    port = portfolio_returns(returns_df, weights_df, dropna=False)
+    rolling = port.rolling(window=window, min_periods=min_periods)
+    rolling_mean = rolling.mean()
+    rolling_std = rolling.std(ddof=1)
 
-    # Rolling mean/std of portfolio returns
-    rolling_mean = portfolio.rolling(
-        window=window, min_periods=min_periods
-    ).mean()
-    rolling_std = portfolio.rolling(window=window, min_periods=min_periods).std(
-        ddof=1
-    )
-
-    sharpe = rolling_mean / rolling_std
-
-    # Avoid inf/-inf when std is zero
-    sharpe = sharpe.replace([np.inf, -np.inf], np.nan)
-
+    zero_std = rolling_std == 0
+    if zero_std.any():
+        warnings.warn(
+            f"rolling_sharpe: {int(zero_std.sum())} of "
+            f"{int(rolling_std.notna().sum())} windows have zero std; "
+            "set to NaN",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    sharpe = rolling_mean / rolling_std.mask(zero_std)
     if scaling_factor:
         sharpe = sharpe * np.sqrt(scaling_factor)
-
     return sharpe
 
 
 def certainty_equivalent(
     returns_df: pd.DataFrame,
     weights_df: pd.DataFrame,
-    risk_free_df: pd.Series | pd.DataFrame,
+    rf_series: pd.Series,
     theta: float = 1.0,
-    *,
-    lag: int = 1,
-    include_rf_in_mean: bool = True,
 ) -> float:
-    """Certainty equivalent of the (next-period) portfolio return.
+    """Certainty equivalent, Anderson & Cheng (2016) eq. (28):
 
-    Uses a mean-variance utility approximation:
-        CE = E[R_p] + E [R_f]- (theta/2) Var(R_p)
+        CE = mean(R_p,t+1) + mean(R_f,t+1) - (theta/2) * Var(R_p,t+1)
 
-    Returns:
-        Scalar certainty equivalent.
+    with R_p the excess portfolio return, Var the sample variance (ddof=1)
+    and R_f taken on the same return periods t+1 (matched by index label).
     """
-    assert isinstance(theta, (int, float)) and theta >= 0
+    if theta < 0:
+        raise ValueError(f"theta must be >= 0, got {theta}")
 
-    port = portfolio_returns(returns_df, weights_df, lag=lag, dropna=True)
-
-    # Coerce risk-free to a Series
-    if isinstance(risk_free_df, pd.DataFrame):
-        assert risk_free_df.shape[1] == 1
-        rf = risk_free_df.iloc[:, 0]
-    else:
-        rf = risk_free_df
-
-    assert isinstance(rf, pd.Series)
-
-    rf_realized = rf.loc[port.index]
-
-    mean_term = float(port.mean())
-    if include_rf_in_mean:
-        mean_term += float(rf_realized.mean())
-
-    var_term = float(port.var(ddof=1))
-
-    ce = mean_term - (float(theta) / 2.0) * var_term
-    return float(ce)
+    port = portfolio_returns(returns_df, weights_df)
+    mean_total = float(port.mean()) + float(rf_series.loc[port.index].mean())
+    return mean_total - theta / 2.0 * float(port.var(ddof=1))
 
 
 def average_turnover(
@@ -204,8 +185,7 @@ def _newey_west_cov(moments: np.ndarray, n_lags: int) -> np.ndarray:
     Returns the (k, k) long-run covariance matrix S such that
     Avar(sqrt(T) * mean(moments)) = S.
     """
-    T, k = moments.shape
-    # demean
+    T = moments.shape[0]
     m = moments - moments.mean(axis=0)
     S = (m.T @ m) / T
     for lag in range(1, n_lags + 1):
@@ -235,6 +215,7 @@ def sharpe_difference_test(
     sigma / sigma* are the respective standard deviations.
 
     Standard errors use a Newey-West HAC covariance with `n_lags` lags.
+    The two series are matched on their common index labels.
 
     Parameters
     ----------
@@ -247,7 +228,6 @@ def sharpe_difference_test(
     -------
     SharpeTestResult namedtuple
     """
-    # Align on common index
     idx = returns_strategy.index.intersection(returns_benchmark.index)
     r_s = returns_strategy.loc[idx].to_numpy(dtype=float)
     r_b = returns_benchmark.loc[idx].to_numpy(dtype=float)
@@ -258,64 +238,50 @@ def sharpe_difference_test(
             f"Too few observations ({T}) for Newey-West with {n_lags} lags."
         )
 
-    # --- GMM point estimates (exactly identified, closed form) ---
+    # GMM point estimates (exactly identified, closed form)
     sigma_s = float(np.std(r_s, ddof=1))
     sigma_b = float(np.std(r_b, ddof=1))
     s_hat = float(np.mean(r_s)) / sigma_s  # Sharpe of strategy
-    sb_hat = float(np.mean(r_b)) / sigma_b  # Sharpe of benchmark
-    d_hat = s_hat - sb_hat  # difference
+    sb_hat = float(np.mean(r_b)) / sigma_b  # Sharpe of benchmark (= s - d)
+    d_hat = s_hat - sb_hat
 
-    # --- Build (T, 4) matrix of demeaned moment conditions ---
-    # g1_t = r_s_t  - s_hat * sigma_s
-    # g2_t = g1_t^2 - sigma_s^2
-    # g3_t = r_b_t  - (s_hat - d_hat) * sigma_b   [= r_b_t - sb_hat * sigma_b]
-    # g4_t = g3_t^2 - sigma_b^2
+    # (T, 4) moment conditions at the estimates
     g1 = r_s - s_hat * sigma_s
     g2 = g1**2 - sigma_s**2
     g3 = r_b - sb_hat * sigma_b
     g4 = g3**2 - sigma_b**2
-    moments = np.column_stack([g1, g2, g3, g4])  # (T, 4)
+    S = _newey_west_cov(np.column_stack([g1, g2, g3, g4]), n_lags)
 
-    # --- Newey-West long-run covariance S ---
-    S = _newey_west_cov(moments, n_lags)  # (4, 4)
-
-    # --- Delta method: Jacobian of (s, d) w.r.t. the four moment conditions ---
-    # The GMM estimator maps sample moments to (sigma_s, s, sigma_b, d).
-    # We want Var(d_hat).  By the delta method:
-    #   Var(sqrt(T) * d_hat) = J_d @ S @ J_d'
-    # where J_d is the 1x4 row of the full Jacobian corresponding to d.
-    #
-    # Differentiating the moment conditions:
-    #   d(s_hat)/d(mean_g1)  = 1/sigma_s
-    #   d(s_hat)/d(sigma_s)  = -s_hat/sigma_s   (via d(sigma_s^2)/d(mean_g2) = 1 => d(sigma_s)/d(mean_g2) = 1/(2*sigma_s))
-    #   Similarly for benchmark.
-    #   d = s_hat - sb_hat, so J_d = J_s - J_sb.
-
-    # Jacobian rows for s_hat (w.r.t. [mean_g1, mean_g2, mean_g3, mean_g4])
-    J_s = np.array([1.0 / sigma_s, -s_hat / (2.0 * sigma_s**2), 0.0, 0.0])
-
-    # Jacobian rows for sb_hat
-    J_sb = np.array([0.0, 0.0, 1.0 / sigma_b, -sb_hat / (2.0 * sigma_b**2)])
-
-    J_d = J_s - J_sb  # 1x4
-
-    # Asymptotic variance of sqrt(T) * d_hat
+    # Delta method. Linearising the four conditions and solving for d gives
+    #   d_hat - d ≈ ḡ1/σ - s·ḡ2/(2σ²) - ḡ3/σ* + s*·ḡ4/(2σ*²),  s* = s - d
+    # so Var(√T·d_hat) = J_d S J_d' with J_d the coefficients below.
+    J_d = np.array(
+        [
+            1.0 / sigma_s,
+            -s_hat / (2.0 * sigma_s**2),
+            -1.0 / sigma_b,
+            sb_hat / (2.0 * sigma_b**2),
+        ]
+    )
     avar_d = float(J_d @ S @ J_d)
     se_d = np.sqrt(max(avar_d, 0.0) / T)
 
-    t_stat = d_hat / se_d if se_d > 0 else np.sign(d_hat) * np.inf
+    if se_d > 0:
+        t_stat = d_hat / se_d
+    elif d_hat == 0:
+        t_stat = 0.0  # identical series: no difference (p = 1)
+    else:
+        t_stat = np.sign(d_hat) * np.inf
 
     critical = norm.ppf(1.0 - (1.0 - confidence) / 2.0)
-    p_approx = float(2.0 * (1.0 - norm.cdf(abs(t_stat))))
-
     return SharpeTestResult(
         sharpe_strategy=s_hat,
         sharpe_benchmark=sb_hat,
         difference=d_hat,
         t_statistic=float(t_stat),
-        outperforms=bool(t_stat > critical),  # significantly better
-        underperforms=bool(t_stat < -critical),  # significantly worse
-        p_approx=p_approx,
+        outperforms=bool(t_stat > critical),
+        underperforms=bool(t_stat < -critical),
+        p_approx=float(2.0 * norm.sf(abs(t_stat))),
     )
 
 
@@ -338,19 +304,18 @@ def compare_to_benchmark(
 
     Returns
     -------
-    DataFrame with columns:
-        sharpe_strategy, sharpe_benchmark, difference, t_statistic, significant, p_approx
-    indexed by strategy name.
+    DataFrame indexed by strategy name, one column per ``SharpeTestResult``
+    field (sharpe_strategy, sharpe_benchmark, difference, t_statistic,
+    outperforms, underperforms, p_approx).
     """
-    r_bench = portfolio_returns(
-        returns_df, weights_benchmark, lag=1, dropna=True
-    )
-
-    rows = {}
-    for name, w in weights_strategies.items():
-        r_strat = portfolio_returns(returns_df, w, lag=1, dropna=True)
-        rows[name] = sharpe_difference_test(
-            r_strat, r_bench, n_lags=n_lags, confidence=confidence
-        )
-
-    return pd.DataFrame(rows).T
+    r_bench = portfolio_returns(returns_df, weights_benchmark)
+    rows = {
+        name: sharpe_difference_test(
+            portfolio_returns(returns_df, w),
+            r_bench,
+            n_lags=n_lags,
+            confidence=confidence,
+        )._asdict()
+        for name, w in weights_strategies.items()
+    }
+    return pd.DataFrame.from_dict(rows, orient="index")

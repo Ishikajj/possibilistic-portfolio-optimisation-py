@@ -1,5 +1,7 @@
 """Tests for portfolio_evaluation_functions.py — portfolio returns, Sharpe, CE, turnover, Sharpe test."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -72,6 +74,12 @@ def test_sharpe_annualised_by_sqrt_scaling(returns, weights):
     assert np.isclose(
         calculate_sharpe_ratio(returns, weights, 252), daily * np.sqrt(252)
     )
+    roll = rolling_sharpe_ratio(returns, weights, window=40)
+    assert np.allclose(
+        rolling_sharpe_ratio(returns, weights, window=40, scaling_factor=252),
+        roll * np.sqrt(252),
+        equal_nan=True,
+    )
 
 
 def test_rolling_sharpe_last_value_matches_window(returns, weights):
@@ -81,6 +89,46 @@ def test_rolling_sharpe_last_value_matches_window(returns, weights):
     assert len(roll) == len(returns)
     assert np.isclose(roll.iloc[-1], last.mean() / last.std(ddof=1))
     assert roll.iloc[: 51 + 39].isna().all()  # needs a full window of returns
+
+
+def test_sharpe_single_return_is_nan_with_warning(returns):
+    w = pd.DataFrame(np.nan, index=returns.index, columns=returns.columns)
+    w.iloc[10] = [1.0, 0.0]  # one invested period -> one return
+    with pytest.warns(RuntimeWarning, match="1 valid return"):
+        assert np.isnan(calculate_sharpe_ratio(returns, w))
+
+
+def test_sharpe_constant_returns_is_nan_with_warning(weights):
+    const = pd.DataFrame(0.25, index=weights.index, columns=weights.columns)
+    with pytest.warns(RuntimeWarning, match="std = 0"):
+        assert np.isnan(calculate_sharpe_ratio(const, weights))
+
+
+def test_rolling_sharpe_counts_zero_std_windows(returns, weights):
+    r = returns.copy()
+    r.iloc[200:] = 0.25  # last windows see constant portfolio returns
+    with pytest.warns(RuntimeWarning, match="zero std") as rec:
+        roll = rolling_sharpe_ratio(r, weights, window=40)
+    n_zero = int(str(rec[0].message).split()[1])
+    assert n_zero == len(r) - (200 + 39)  # windows fully inside 200..T-1
+    assert roll.iloc[200 + 39 :].isna().all()
+    assert not np.isinf(roll).any()
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda r, w: rolling_sharpe_ratio(r, w, window=0),
+        lambda r, w: rolling_sharpe_ratio(r, w, window=10, min_periods=11),
+        lambda r, w: certainty_equivalent(
+            r, w, pd.Series(0.0, index=r.index), theta=-1.0
+        ),
+    ],
+    ids=["window=0", "min_periods>window", "theta<0"],
+)
+def test_bad_inputs_raise_value_error_with_message(returns, weights, call):
+    with pytest.raises(ValueError, match="must"):
+        call(returns, weights)
 
 
 # --- certainty equivalent -------------------------------------------------
@@ -95,13 +143,14 @@ def test_certainty_equivalent_formula(returns, weights):
     )
 
 
-def test_certainty_equivalent_without_rf_and_from_dataframe(returns, weights):
-    rf = pd.DataFrame({"RF": 0.0001}, index=returns.index)
-    with_rf = certainty_equivalent(returns, weights, rf)
-    without = certainty_equivalent(
-        returns, weights, rf, include_rf_in_mean=False
+def test_certainty_equivalent_uses_rf_on_return_dates(returns, weights):
+    # RF differs before / after the first return date (row 51)
+    rf = pd.Series(
+        np.where(returns.index < 51, 1.0, 0.0001), index=returns.index
     )
-    assert np.isclose(with_rf - without, 0.0001)
+    port = portfolio_returns(returns, weights)
+    expected = port.mean() + 0.0001 - 0.5 * port.var(ddof=1)
+    assert np.isclose(certainty_equivalent(returns, weights, rf), expected)
 
 
 # --- turnover (only fully-invested stretch; NaN-row behaviour is a logged bug) --

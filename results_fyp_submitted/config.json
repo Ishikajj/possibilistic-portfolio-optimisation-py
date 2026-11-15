@@ -7,6 +7,8 @@
   "START_DATE": "1980-01-01",
   "BURN_IN": 500,
   "PERIODS_UNTIL_INVESTMENT": 500,
+  "SCALING_FACTOR": 1,
+  "_scaling_factor": "verified 2026-11-16: saved Sharpe recomputes exactly at scale 1; evaluation code at 4e8cb38 has _SCALING_FACTOR = 1",
   "THETA": 1.0,
   "MAX_MODELS": 100,
   "MERGE_THRESHOLD": 0.15,
