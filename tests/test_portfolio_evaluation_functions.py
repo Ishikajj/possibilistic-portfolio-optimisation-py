@@ -153,18 +153,26 @@ def test_certainty_equivalent_uses_rf_on_return_dates(returns, weights):
     assert np.isclose(certainty_equivalent(returns, weights, rf), expected)
 
 
-# --- turnover (only fully-invested stretch; NaN-row behaviour is a logged bug) --
+# --- turnover -------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="TOOLING_TODO bug: first/NaN rows counted as 0 turnover (sum skips NaN)",
-)
 def test_turnover_on_fully_invested_weights():
     w = pd.DataFrame({"a": [1.0, 0.0, 1.0, 1.0], "b": [0.0, 1.0, 0.0, 0.0]})
     # changes: 2, 2, 0 -> mean 4/3
     assert np.isclose(average_turnover(w), 4.0 / 3.0)
     assert np.isclose(average_turnover(w, scaling_factor=252), 252 * 4.0 / 3.0)
+
+
+def test_turnover_ignores_rows_without_weights():
+    nan = np.nan
+    w = pd.DataFrame(
+        {
+            "a": [nan, nan, 1.0, 0.7, 1.0, nan],
+            "b": [nan, nan, 0.0, 0.3, 0.0, nan],
+        }
+    )
+    # only rows 3 and 4 have a previous weight: 0.6, 0.6
+    assert np.isclose(average_turnover(w), 0.6)
 
 
 def test_turnover_constant_weights_is_zero():
@@ -215,6 +223,16 @@ def test_sharpe_difference_detects_clear_outperformance_and_is_antisymmetric():
     assert 0.0 <= ab.p_approx < 0.05
 
 
+def test_sharpe_difference_identical_series_is_no_difference():
+    r = pd.Series(np.random.default_rng(0).normal(0.001, 0.01, 500))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # no RuntimeWarning
+        res = sharpe_difference_test(r, r.copy())
+    assert res.difference == 0.0
+    assert res.t_statistic == 0.0 and res.p_approx == 1.0
+    assert not res.outperforms and not res.underperforms
+
+
 def test_sharpe_difference_aligns_on_common_index():
     rng = np.random.default_rng(5)
     a = pd.Series(rng.normal(0.001, 0.01, 500))
@@ -245,10 +263,6 @@ def test_compare_to_benchmark_one_row_per_strategy(returns, weights):
     assert out.shape[1] == len(SharpeTestResult._fields)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="TOOLING_TODO bug: compare_to_benchmark loses the result field names",
-)
 def test_compare_to_benchmark_has_named_columns(returns, weights):
     out = compare_to_benchmark(returns, weights, {"x": _other_weights(weights)})
     assert list(out.columns) == list(SharpeTestResult._fields)

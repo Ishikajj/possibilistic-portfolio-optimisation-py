@@ -128,14 +128,23 @@ Edge-case notes:
 
 ### 2.3 `portfolio_evaluation_functions.py` — [x] tests drafted 2026-11-13
 Tests (`tests/test_portfolio_evaluation_functions.py`, 16 passing + 2 xfail = logged bugs): weights at t × returns at t+1, NaN rows kept/dropped, column alignment by name, Sharpe = mean/std and √scaling, rolling Sharpe last window + warm-up NaNs, CE formula with/without RF and RF as DataFrame, turnover on constant weights; Sharpe-difference test: Newey-West(0 lags) = sample cov, symmetric, point estimates, detects clear outperformance, antisymmetric t, common-index alignment, too-few-obs error, `compare_to_benchmark` one row per strategy.
-Bugs (TOOLING_TODO): turnover diluted by NaN rows (xfail test); `compare_to_benchmark` loses column names (xfail test).
+Bugs (TOOLING_TODO): ~~turnover diluted by NaN rows~~ fixed 2026-11-16 (xfail removed, NaN-row test added, snapshot reference regenerated: only `avg_turnover` changed); ~~`compare_to_benchmark` loses column names~~ fixed 2026-11-15 (xfail removed).
+
+Structure cleanup (2026-11-15, 392 → 317 lines, snapshot bit for bit):
+- [x] Unused options removed: `lag` (`portfolio_returns`, `certainty_equivalent`; only 1 was ever used, 0 would be look-ahead), `include_rf_in_mean` and RF-as-DataFrame in `certainty_equivalent` (RF is now `rf_series: pd.Series`).
+- [x] Clutter: redundant `float()` / annotated temporaries, one `rolling` object instead of two, unused `k` in `_newey_west_cov`, garbled Jacobian comment → one-line derivation, single `J_d` array, `2·norm.sf` p-value (no underflow to 0), stale module / `compare_to_benchmark` docstrings.
+- [x] `analysis.ipynb` cells 20 / 25 titled the `scalars.csv` Sharpe heatmaps "Annualised" but plotted daily values → labels now follow `SCALING_FACTOR` from the run's `config.json` (cell 2; assumes 1 with a printed note if missing) (2026-11-16). Outputs still show the old titles until re-run. `predictive_diagnostics.ipynb` cell 3 annualises its own rolling Sharpe with √window (right only because window = 252).
+- [x] `scaling_factor` kept (removed and restored 2026-11-16): Sharpe / rolling Sharpe × √factor, turnover × factor, as originally written. Pipeline passes `config.SCALING_FACTOR = 1` (daily, as Anderson & Cheng) instead of the hard-coded `_SCALING_FACTOR`; `evaluation_pipeline` docstrings say so. `"SCALING_FACTOR": 1` added to both `results_*/config.json` (verified from saved Sharpe). Once the pipeline writes `config.json` (0.4), include it.
+- Kept: `SharpeTestResult` NamedTuple (named fields, used by the tests and turned into the `compare_to_benchmark` table); `dropna` argument (rolling Sharpe needs the NaN rows).
 
 Edge-case notes:
-- [?] Sharpe with std = 0 returns 0.0 (not NaN); with a single return → NaN.
-- [?] Rolling Sharpe replaces ±inf by NaN silently; `min_periods` defaults to the full window.
-- [?] CE adds mean RF to excess returns (`include_rf_in_mean=True`) — intended? RF series must share the returns index (positional 0..T for real data).
-- [?] Sharpe test with identical series → `t = nan` + RuntimeWarning (TODO item).
-- [?] Docstring typo "inno dexed" in `portfolio_returns`.
+- [x] Sharpe with std = 0 returns 0.0 (not NaN); with a single return → NaN. → Both now NaN + `RuntimeWarning` with the reason (2026-11-15). Tests added.
+- [x] Rolling Sharpe replaces ±inf by NaN silently → zero-std windows now NaN + one warning with the count; warm-up NaNs (`min_periods` = full window, kept) stay silent (2026-11-15). Test added.
+- [x] CE adds mean RF to excess returns (`include_rf_in_mean=True`) — **intended**: matches Anderson & Cheng (2016) eq. (28), `mean(R_p) + mean(R_f) − θ/2·Var(R_p)`, sample variance, R_f on return dates t+1. Docstring now states the formula + reference (2026-11-15). Open part: RF matched by row number, not date → fixed by keeping `Date` as the index (proposed 2026-11-15, with the TODO timing fix; not scheduled yet).
+- [x] Sharpe test with identical series → `t = nan` + RuntimeWarning (TODO item). → Now t = 0, p = 1, no warning (2026-11-15). Test added.
+- [x] Docstring typo "inno dexed" in `portfolio_returns` — fixed 2026-11-15.
+- [ ] **Date index change touches this file** (when `Date` is kept as the index, with the TODO timing fix): `lag` is already gone (fixed 1-day shift); `portfolio_returns` output becomes indexed by return date; `certainty_equivalent` then matches RF by date (`rf_series.loc[port.index]` fails loudly on missing days instead of picking the wrong row); `sharpe_difference_test` aligns on the common index labels (`index.intersection`) → row numbers today, dates then; no code change needed, add a test that it aligns by date. Tests here build integer-indexed frames → update fixtures (date index).
+- [x] (2026-11-15) Input checks: `assert`s → `ValueError` with a message for value checks (`lag ≥ 0`, `window > 0`, `1 ≤ min_periods ≤ window`, `θ ≥ 0`, RF one column); `isinstance` asserts dropped (type hints + Pylance). One `assert` kept for type narrowing. Parametrised test added.
 
 ### 2.4 `distribution_evaluation_functions.py` — [x] tests drafted 2026-11-13
 Tests (`tests/test_distribution_evaluation_functions.py`, 8 passing): log-likelihood == `scipy.stats.multivariate_normal.logpdf` with lag 1 and lag 0, Mahalanobis == `scipy.spatial.distance.mahalanobis`, squared option, NaN rows before predictions + index kept, average = mean of valid rows, all-NaN → NaN, shape mismatch rejected.
@@ -208,6 +217,13 @@ Edge-case notes:
 ### 2.11 `evaluation_pipeline.py` — [x] tests drafted 2026-11-13
 Tests (`tests/test_evaluation_pipeline.py`, 8 passing; fake run folder): strategy discovery (incl. `*_longonly`), loading weights ± predictives, missing files raise, scalar metrics == the metric functions (Sharpe daily, CE, log-lik), NaN when RF / predictives missing, `run_evaluation` writes `scalars.csv` (5 columns), `rolling_sharpe.csv`, and `log_likelihood.csv` / `mahalanobis.csv` for predictive strategies only, one broken strategy doesn't stop the rest, empty folder raises.
 Existing TODO: `__main__` RF loading (`rf.csv` without Date → KeyError; real data re-derives RF from its own `START_DATE`). The RF logic lives inside `if __name__ == "__main__"`, so it can't be tested until it's pulled into a function (do that with the fix).
+
+- [x] (2026-11-15) `evaluate_all_strategies` catches each strategy's warnings and shows them again tagged `[algo_name]` (so identical messages from different strategies aren't collapsed into one by Python). Test added.
+- [ ] **Duplication / flexibility** (~1–1.5 h, agreed 2026-11-15):
+  - `strategies: list[str] | None = None` on `evaluate_all_strategies` / `run_evaluation` (`None` = all in folder; unknown name → error listing what's there).
+  - Metrics as dicts `SCALAR_METRICS` / `SERIES_METRICS` (name → function of one bundle: returns, weights, predictives, rf, theta, window; returns NaN / `None` when a prerequisite is missing). Overridable via `scalar_metrics=` / `series_metrics=`.
+  - Replaces `compute_scalar_metrics` / `compute_series_metrics` with one loop, and the three copy-pasted blocks in `save_evaluation_results` with one loop writing `<name>.csv`.
+  - Keep file names, `scalars.csv` column order and the `run_evaluation(folder, rf_series=, theta=)` signature → snapshot stays bit for bit, `make_snapshots.py` unaffected. Update the two tests that call `compute_scalar_metrics` directly.
 
 Edge-case notes:
 - [?] **Sharpe in `scalars.csv` is daily** (`_SCALING_FACTOR = 1`), but `compute_scalar_metrics`' docstring says "annualised (scaling = 252)". FYP values are daily (market ≈ 0.033 ≈ 0.52 annualised) — check the thesis tables are labelled daily. Fix the docstring.

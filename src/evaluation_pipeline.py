@@ -29,6 +29,7 @@ run_evaluation             -- end-to-end: load → evaluate → save
 from __future__ import annotations
 
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -36,6 +37,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from config import SCALING_FACTOR
 from distribution_evaluation_functions import (
     average_log_likelihood,
     mahalanobis_distance_series,
@@ -49,7 +51,6 @@ from portfolio_evaluation_functions import (
 )
 
 _ROLLING_WINDOW = 252
-_SCALING_FACTOR = 1
 
 
 # ── 1. I/O helpers ─────────────────
@@ -129,7 +130,7 @@ def compute_scalar_metrics(
 
     Always computed
     ---------------
-    sharpe            annualised Sharpe ratio (scaling = 252)
+    sharpe            Sharpe ratio, scaled by config.SCALING_FACTOR (1 = daily)
 
     Requires ``rf_series``
     ----------------------
@@ -145,7 +146,7 @@ def compute_scalar_metrics(
     results: dict = {}
 
     results["sharpe"] = calculate_sharpe_ratio(
-        returns_df, weights_df, scaling_factor=_SCALING_FACTOR
+        returns_df, weights_df, scaling_factor=SCALING_FACTOR
     )
 
     if rf_series is not None:
@@ -168,7 +169,7 @@ def compute_scalar_metrics(
         results["avg_mahalanobis"] = float("nan")
 
     results["avg_turnover"] = average_turnover(
-        weights_df, scaling_factor=_SCALING_FACTOR
+        weights_df, scaling_factor=SCALING_FACTOR
     )
 
     return results
@@ -184,7 +185,7 @@ def compute_series_metrics(
 
     Always computed
     ---------------
-    rolling_sharpe            rolling annualised Sharpe over ``rolling_window`` days
+    rolling_sharpe            rolling Sharpe over ``rolling_window`` days, scaled by config.SCALING_FACTOR
 
     Requires ``mu_sigma_dict``
     --------------------------
@@ -197,7 +198,7 @@ def compute_series_metrics(
         returns_df,
         weights_df,
         window=rolling_window,
-        scaling_factor=_SCALING_FACTOR,
+        scaling_factor=SCALING_FACTOR,
     )
 
     if mu_sigma_dict is not None:
@@ -267,13 +268,27 @@ def evaluate_all_strategies(
     results: dict[str, dict] = {}
     for algo_name in strategies:
         print(f"  Evaluating {algo_name}...")
-        try:
-            results[algo_name] = evaluate_strategy(
-                returns_df, folder, algo_name, rf_series, theta, rolling_window
+        # Catch warnings from the metric functions and re-raise them tagged
+        # with the strategy name (also stops Python showing identical
+        # messages from different strategies only once).
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            try:
+                results[algo_name] = evaluate_strategy(
+                    returns_df,
+                    folder,
+                    algo_name,
+                    rf_series,
+                    theta,
+                    rolling_window,
+                )
+            except Exception as exc:
+                print(f"  [WARNING] {algo_name} failed: {exc}")
+                results[algo_name] = {"scalars": {}, "series": {}}
+        for w in caught:
+            warnings.warn(
+                f"[{algo_name}] {w.message}", w.category, stacklevel=2
             )
-        except Exception as exc:
-            print(f"  [WARNING] {algo_name} failed: {exc}")
-            results[algo_name] = {"scalars": {}, "series": {}}
 
     return results
 

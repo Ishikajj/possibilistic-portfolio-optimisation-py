@@ -150,16 +150,14 @@ def average_turnover(
     """Mean daily portfolio turnover.
 
     Turnover at t = sum_i |w_{i,t} - w_{i,t-1}|.
-    Averaged over all periods with a valid previous weight.
+    Averaged over the periods where both w_t and w_{t-1} exist (rows before
+    investment, the first invested row and the last NaN row are left out).
     Multiply by scaling_factor (e.g. 252) to annualise.
     """
-    assert isinstance(weights_df, pd.DataFrame)
-
-    daily = weights_df.diff().abs().sum(axis=1).dropna()
-
+    # skipna=False: an all-NaN row must stay NaN (not 0) so dropna removes it
+    daily = weights_df.diff().abs().sum(axis=1, skipna=False).dropna()
     if daily.empty:
         return float("nan")
-
     to = float(daily.mean())
     if scaling_factor:
         to *= scaling_factor

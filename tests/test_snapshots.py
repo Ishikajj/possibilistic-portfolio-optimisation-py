@@ -3,6 +3,11 @@
 Reference: tests/snapshots/reference_no_necessity.npz, made from the `dev` branch
 (FYP code) with necessity bypassed (see make_snapshots.py). Runs in ~25 s.
 
+Deliberate differences from the FYP code (reference regenerated from post-fyp):
+- 2026-11-16 avg_turnover (scalars, column 4): NaN rows no longer counted as
+  zero turnover. Only that column changed (checked with --compare).
+  tests/snapshots/reference.npz (real necessity) still has the old values.
+
 When a result-changing fix lands on purpose, check that only the expected keys
 differ (run make_snapshots.py --compare), then regenerate the reference from the
 fixed code. The .npz files are gitignored, so note in the fix's commit message
@@ -39,9 +44,9 @@ ms = _load_make_snapshots()
 )
 @pytest.mark.skipif(
     not REFERENCE.exists(),
-    reason=f"{REFERENCE.name} missing (gitignored); regenerate from `dev`: "
-    "git archive dev src | tar -x -C <dir> && uv run python "
-    "tests/snapshots/make_snapshots.py --src <dir>/src "
+    reason=f"{REFERENCE.name} missing (gitignored); regenerate from the "
+    "current code (`dev` + the fixes in the module docstring): uv run python "
+    "tests/snapshots/make_snapshots.py --src src "
     f"--out {REFERENCE.relative_to(HERE.parent)} --bypass-necessity",
 )
 def test_pipeline_matches_fyp_reference(monkeypatch, capsys):

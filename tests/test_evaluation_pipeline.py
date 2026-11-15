@@ -76,7 +76,7 @@ def test_scalar_metrics_wire_up_the_metric_functions(run_folder, rf):
     w, pred = ev.load_strategy_outputs(run_folder, "model")
     out = ev.compute_scalar_metrics(returns, w, pred, rf, theta=2.0)
     assert np.isclose(
-        out["sharpe"], calculate_sharpe_ratio(returns, w, 1)
+        out["sharpe"], calculate_sharpe_ratio(returns, w, ev.SCALING_FACTOR)
     )  # daily
     assert np.isclose(
         out["ceq"], certainty_equivalent(returns, w, rf, theta=2.0)
@@ -130,6 +130,19 @@ def test_one_broken_strategy_does_not_stop_the_rest(run_folder, rf, capsys):
     assert "WARNING" in capsys.readouterr().out
     scalars = ev.scalars_to_dataframe(results)
     assert "broken" not in scalars.index  # silently dropped from scalars.csv
+
+
+def test_metric_warnings_are_tagged_with_strategy_name(run_folder):
+    w = pd.DataFrame(np.nan, index=range(T), columns=["a", "b"])
+    w.iloc[10] = 0.5  # one invested period -> Sharpe undefined
+    for name in ["lonely_1", "lonely_2"]:
+        w.to_csv(run_folder / f"{name}_weights.csv")
+    with pytest.warns(RuntimeWarning) as rec:
+        ev.evaluate_all_strategies(run_folder)
+    msgs = [str(r.message) for r in rec]
+    # same underlying warning, shown once per strategy
+    assert any(m.startswith("[lonely_1] sharpe") for m in msgs)
+    assert any(m.startswith("[lonely_2] sharpe") for m in msgs)
 
 
 def test_empty_folder_raises(tmp_path):
