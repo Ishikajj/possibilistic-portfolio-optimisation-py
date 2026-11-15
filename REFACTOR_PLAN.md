@@ -94,6 +94,11 @@ All of `src/*.py` + `src/necessity_alternative_methods/` → `src/possibilistic_
 Order follows dependencies (each file's tests rely only on files already covered).
 Tests go in `tests/test_<module>.py`. Shared tiny fixtures in `tests/conftest.py`.
 
+**Rule: unexpected NaNs are reported where they are made (2026-11-16).** Evaluation (2.3, 2.4) treats NaN inputs as "no forecast / not invested" and does not report them: it can't tell a planned NaN (before investment starts, last row) from garbage. So every algorithm that leaves a row NaN **after** investment starts must say so itself: one `RuntimeWarning` per call with counts per reason (pattern: `markowitz.py`, 2.1). No silent `continue` / `except: pass` in the investment window. Silent sites found 2026-11-16:
+- `alternative_investment_rules`: `_minvar_mean_target` (denominator 0 / non-finite → NaN), Jorion (2 skip sites), Kan-Zhou (5 skip sites) → 2.5.
+- `possibilistic_bayesian.run_core`: `except Exception: pass` around aggregation → 2.9.
+- Already reporting: `markowitz` (singular Σ, optimiser failure). Bayesian: no silent NaN path found.
+
 ### 2.1 `markowitz.py` — [x] done 2026-11-15 (not committed)
 Used by: `bayesian_averaging`, `possibilistic_bayesian`, `alternative_investment_rules` (unconstrained); `pipeline_wrapper` (long-only).
 
@@ -146,14 +151,25 @@ Edge-case notes:
 - [ ] **Date index change touches this file** (when `Date` is kept as the index, with the TODO timing fix): `lag` is already gone (fixed 1-day shift); `portfolio_returns` output becomes indexed by return date; `certainty_equivalent` then matches RF by date (`rf_series.loc[port.index]` fails loudly on missing days instead of picking the wrong row); `sharpe_difference_test` aligns on the common index labels (`index.intersection`) → row numbers today, dates then; no code change needed, add a test that it aligns by date. Tests here build integer-indexed frames → update fixtures (date index).
 - [x] (2026-11-15) Input checks: `assert`s → `ValueError` with a message for value checks (`lag ≥ 0`, `window > 0`, `1 ≤ min_periods ≤ window`, `θ ≥ 0`, RF one column); `isinstance` asserts dropped (type hints + Pylance). One `assert` kept for type narrowing. Parametrised test added.
 
-### 2.4 `distribution_evaluation_functions.py` — [x] tests drafted 2026-11-13
+### 2.4 `distribution_evaluation_functions.py` — [x] done 2026-11-16 (tests drafted 2026-11-13)
 Tests (`tests/test_distribution_evaluation_functions.py`, 8 passing): log-likelihood == `scipy.stats.multivariate_normal.logpdf` with lag 1 and lag 0, Mahalanobis == `scipy.spatial.distance.mahalanobis`, squared option, NaN rows before predictions + index kept, average = mean of valid rows, all-NaN → NaN, shape mismatch rejected.
 
+Structure cleanup (2026-11-16, 174 → 114 lines, snapshot bit for bit):
+- [x] **Duplication:** `mahalanobis_distance_series` / `multivariate_log_likelihood_series` were the same loop → one private `_gaussian_terms` returns the `quad` and `logdet` arrays; the public functions are ~3 lines each. `_prepare_scoring_inputs` / `_gaussian_scoring_terms` merged into it (no `n_assets` return, no extra copies of Σ / returns).
+- [x] `lag` removed (pipeline always 1; `lag=0` scores a forecast against a return it already used = in-sample). Fixed 1-step shift. `lag=0` test removed.
+- [x] `assert`s → `ValueError` with a message (shapes, `regularization ≥ 0`); `isinstance` asserts dropped. Tests: shape mismatch, negative regularization, inputs not modified.
+- [x] Module docstring: Mahalanobis is the square root (`squared=True` drops it).
+- Kept: `squared` option.
+- [x] `average_log_likelihood` removed (2026-11-16): the pipeline averages the log-lik series with `.dropna().mean()`, the same way it already did Mahalanobis.
+- [x] `_gaussian_terms` shortened: NaN check, symmetrising and `slogdet` on all rows at once; `solve` stays per row (a batched solve differs in the last bit on 11-asset data). "linear algebra error" reason gone (`slogdet` and `solve` share the LU, so `sign > 0` can't fail in `solve`). Bit for bit.
+- [ ] **Date index change touches this file** (with the 2.3 date item): the 1-day shift stays (forecast at t−1 scores the return at t) and so does `rows = flatnonzero(ok)[good] + 1` (positions in the shifted arrays → return rows). Output Series take `returns_df.index`, so they become date-indexed for free. `mu_hat` / `sigma_hat` (`.npy`) have no index and are matched to returns **by position**, guarded only by the shape check → when dates go in, save / check the forecast dates too (test: forecast row t belongs to return date t).
+- [~] → 2.11: scoring still runs 4× per strategy (avg log-lik, avg Mahalanobis, then both series again) → compute each series once, average for `scalars.csv`.
+
 Edge-case notes:
-- [?] Invalid Σ (non-positive determinant, singular) → row silently skipped, so it's left out of the average with no count.
-- [?] Each strategy is averaged over its own valid rows (ties in with the possibilistic row-500 bug).
-- [?] Scoring is Gaussian even though NIW predictives are Student-t — a modelling choice, worth one docstring line.
-- [?] Default `regularization=1e-10` is added to Σ before scoring.
+- [x] Invalid Σ (non-positive determinant, singular) → row silently skipped, so it's left out of the average with no count. → Now one `RuntimeWarning` with counts per reason (NaN rows before investment not counted) (2026-11-16). FYP results: 0 such rows in all 20 datasets × 9 predictive strategies. (Regularization since removed, see below.)
+- [~] Each strategy is averaged over its own valid rows (ties in with the possibilistic row-500 bug). → 2.11 (common evaluation window is an evaluation decision).
+- [x] Scoring is Gaussian even though NIW predictives are Student-t — kept (same rule for all strategies; benchmarks have no t predictive); module docstring says so (2026-11-16).
+- [x] Default `regularization=1e-10` was added to Σ before scoring → **removed** (2026-11-16): a singular / non-PD Σ makes the row invalid (NaN, counted in the warning) instead of being scored on ε·I (extreme values that can dominate an average). Not negligible: VW benchmark Σ have smallest eigenvalues down to ~1e-9, so FYP avg log-lik moves in the 2nd decimal (e.g. 10-Industry VW rolling-short 42.4805 → 42.4662), no rows lost, no ranking change; Bayesian / possibilistic unchanged (min eigenvalue ≥ 1e-6). Snapshot reference regenerated (log-lik / Mahalanobis keys only).
 
 ### 2.5 `alternative_investment_rules.py` — [x] tests drafted 2026-11-13
 Tests (`tests/test_alternative_investment_rules.py`, 17 passing): incomplete beta vs numerical integral, `_solve_or_pinv` singular fallback, min-variance mean target = GMV portfolio mean, 1/N, market (and KeyError without `Mkt-RF`), min-variance vs Σ⁻¹1 normalised + delayed start when window > burn-in, historical and rolling moments + weights, **Jorion vs an independent implementation of the 1986 formulas**, Jorion shrinkage in (0,1) + strategy uses μ*/Σ*, Kan-Zhou Σ (MLE), μ* convex combination, h formula, strategy weights = (h/θ)Σ⁻¹μ*, window-too-short errors.
@@ -162,7 +178,7 @@ Bugs / checks (TOOLING_TODO): Kan-Zhou saved mean scaled by h; verify Kan-Zhou b
 
 Edge-case notes:
 - [?] `minimum_variance_strategy` uses `np.linalg.inv` → singular window crashes (same as Markowitz).
-- [?] Jorion / Kan-Zhou skip a row silently (NaN weights) when q ≤ 0, ψ < 0, or the beta is non-finite — no count.
+- [ ] Jorion / Kan-Zhou skip a row silently (NaN weights) when q ≤ 0, ψ < 0, or the beta is non-finite — no count. Also `_minvar_mean_target` → NaN on a zero / non-finite denominator. → Report with counts per reason (Part 2 NaN rule).
 - [?] Kan-Zhou ε can be negative → v outside (0,1) (no check).
 - [?] Jorion / Kan-Zhou compute moments up to T-2; historical / rolling up to T-1 (last row has no use anyway).
 - [?] `_incomplete_beta_unregularized`: dead `if _betainc is not None` branch (TODO item), docstring typo "incomp2lete".
@@ -201,7 +217,7 @@ Edge-case notes:
 - [?] Merge diagnostic `hellinger_avg` is the average from the *last* merge pass only (reset each pass).
 - [?] Hellinger returns 1.0 (max distance) on numerical failure, silently.
 - [?] `_prune_models` docstring mentions a threshold the function no longer has.
-- [?] `except Exception: pass` around aggregation; `burn_obs = min(burn_in, T // 2)` (TODO item).
+- [ ] `except Exception: pass` around aggregation → report with counts (Part 2 NaN rule); `burn_obs = min(burn_in, T // 2)` (TODO item).
 - [ ] L830 `test_run_core` (needs real data, not a pytest test) → rename or delete in Part 1.
 
 ### 2.10 `pipeline_wrapper.py` — [x] tests drafted 2026-11-13
@@ -219,6 +235,8 @@ Tests (`tests/test_evaluation_pipeline.py`, 8 passing; fake run folder): strateg
 Existing TODO: `__main__` RF loading (`rf.csv` without Date → KeyError; real data re-derives RF from its own `START_DATE`). The RF logic lives inside `if __name__ == "__main__"`, so it can't be tested until it's pulled into a function (do that with the fix).
 
 - [x] (2026-11-15) `evaluate_all_strategies` catches each strategy's warnings and shows them again tagged `[algo_name]` (so identical messages from different strategies aren't collapsed into one by Python). Test added.
+- [ ] From 2.4: compute the log-likelihood / Mahalanobis series once per strategy (now 4 passes) and average them. Add the Sharpe-difference test (`compare_to_benchmark`) to the outputs (TOOLING_TODO).
+- [ ] From 2.4: each strategy is averaged over its own valid rows → decide on a common evaluation window across strategies (different start rows, e.g. possibilistic row-500 bug).
 - [ ] **Duplication / flexibility** (~1–1.5 h, agreed 2026-11-15):
   - `strategies: list[str] | None = None` on `evaluate_all_strategies` / `run_evaluation` (`None` = all in folder; unknown name → error listing what's there).
   - Metrics as dicts `SCALAR_METRICS` / `SERIES_METRICS` (name → function of one bundle: returns, weights, predictives, rf, theta, window; returns NaN / `None` when a prerequisite is missing). Overridable via `scalar_metrics=` / `series_metrics=`.

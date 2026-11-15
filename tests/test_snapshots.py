@@ -7,6 +7,9 @@ Deliberate differences from the FYP code (reference regenerated from post-fyp):
 - 2026-11-16 avg_turnover (scalars, column 4): NaN rows no longer counted as
   zero turnover. Only that column changed (checked with --compare).
   tests/snapshots/reference.npz (real necessity) still has the old values.
+- 2026-11-16 log_likelihood, mahalanobis (+ avg_log_likelihood, avg_mahalanobis
+  in scalars): no 1e-10 * I added to Sigma before scoring (max rel. diff 6e-4,
+  near-singular benchmark covariances); same NaN pattern. reference.npz too.
 
 When a result-changing fix lands on purpose, check that only the expected keys
 differ (run make_snapshots.py --compare), then regenerate the reference from the

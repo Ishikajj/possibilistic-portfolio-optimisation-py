@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 import evaluation_pipeline as ev
-from distribution_evaluation_functions import average_log_likelihood
+from distribution_evaluation_functions import multivariate_log_likelihood_series
 from portfolio_evaluation_functions import (
     calculate_sharpe_ratio,
     certainty_equivalent,
@@ -82,7 +82,8 @@ def test_scalar_metrics_wire_up_the_metric_functions(run_folder, rf):
         out["ceq"], certainty_equivalent(returns, w, rf, theta=2.0)
     )
     assert np.isclose(
-        out["avg_log_likelihood"], average_log_likelihood(returns, pred)
+        out["avg_log_likelihood"],
+        multivariate_log_likelihood_series(returns, pred).mean(),
     )
     assert np.isfinite(out["avg_mahalanobis"]) and np.isfinite(
         out["avg_turnover"]

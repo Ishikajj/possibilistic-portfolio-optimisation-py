@@ -39,7 +39,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import SCALING_FACTOR
 from distribution_evaluation_functions import (
-    average_log_likelihood,
     mahalanobis_distance_series,
     multivariate_log_likelihood_series,
 )
@@ -157,8 +156,11 @@ def compute_scalar_metrics(
         results["ceq"] = float("nan")
 
     if mu_sigma_dict is not None:
-        results["avg_log_likelihood"] = average_log_likelihood(
+        ll = multivariate_log_likelihood_series(
             returns_df, mu_sigma_dict
+        ).dropna()
+        results["avg_log_likelihood"] = (
+            float(ll.mean()) if not ll.empty else float("nan")
         )
         mah = mahalanobis_distance_series(returns_df, mu_sigma_dict).dropna()
         results["avg_mahalanobis"] = (

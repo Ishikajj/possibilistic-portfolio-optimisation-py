@@ -1,5 +1,7 @@
 """Tests for distribution_evaluation_functions.py — Gaussian predictive scoring."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -7,7 +9,6 @@ from scipy.spatial.distance import mahalanobis
 from scipy.stats import multivariate_normal
 
 from distribution_evaluation_functions import (
-    average_log_likelihood,
     mahalanobis_distance_series,
     multivariate_log_likelihood_series,
 )
@@ -26,9 +27,9 @@ def setup():
     return returns, {"mu_hat": mu, "sigma_hat": sigma}
 
 
-def test_log_likelihood_matches_scipy_with_lag_1(setup):
+def test_log_likelihood_matches_scipy(setup):
     returns, pred = setup
-    ll = multivariate_log_likelihood_series(returns, pred, regularization=0.0)
+    ll = multivariate_log_likelihood_series(returns, pred)
     for t in range(6, len(returns)):  # moments at t-1 score returns at t
         expected = multivariate_normal.logpdf(
             returns.iloc[t], pred["mu_hat"][t - 1], pred["sigma_hat"][t - 1]
@@ -38,7 +39,7 @@ def test_log_likelihood_matches_scipy_with_lag_1(setup):
 
 def test_mahalanobis_matches_scipy(setup):
     returns, pred = setup
-    md = mahalanobis_distance_series(returns, pred, regularization=0.0)
+    md = mahalanobis_distance_series(returns, pred)
     t = 10
     VI = np.linalg.inv(pred["sigma_hat"][t - 1])
     assert np.isclose(
@@ -53,18 +54,6 @@ def test_squared_mahalanobis_is_square(setup):
     assert np.allclose(md.dropna() ** 2, md2.dropna())
 
 
-def test_lag_0_scores_same_row(setup):
-    returns, pred = setup
-    ll = multivariate_log_likelihood_series(
-        returns, pred, lag=0, regularization=0.0
-    )
-    t = 10
-    expected = multivariate_normal.logpdf(
-        returns.iloc[t], pred["mu_hat"][t], pred["sigma_hat"][t]
-    )
-    assert np.isclose(ll.iloc[t], expected)
-
-
 def test_rows_without_prediction_are_nan_and_index_kept(setup):
     returns, pred = setup
     ll = multivariate_log_likelihood_series(returns, pred)
@@ -75,19 +64,45 @@ def test_rows_without_prediction_are_nan_and_index_kept(setup):
     assert ll.iloc[6:].notna().all()
 
 
-def test_average_log_likelihood_is_mean_of_valid_rows(setup):
-    returns, pred = setup
-    ll = multivariate_log_likelihood_series(returns, pred)
-    assert np.isclose(average_log_likelihood(returns, pred), ll.dropna().mean())
-
-
-def test_average_log_likelihood_all_nan_is_nan(setup):
+def test_all_nan_predictions_give_all_nan_scores(setup):
     returns, pred = setup
     pred = {k: np.full_like(v, np.nan) for k, v in pred.items()}
-    assert np.isnan(average_log_likelihood(returns, pred))
+    assert multivariate_log_likelihood_series(returns, pred).isna().all()
+    assert mahalanobis_distance_series(returns, pred).isna().all()
 
 
 def test_shape_mismatch_is_rejected(setup):
     returns, pred = setup
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="must have shapes"):
         multivariate_log_likelihood_series(returns.iloc[:, :2], pred)
+    with pytest.raises(ValueError, match="must have shapes"):
+        mahalanobis_distance_series(returns.iloc[:-1], pred)
+
+
+def test_inputs_are_not_modified(setup):
+    returns, pred = setup
+    before = {k: v.copy() for k, v in pred.items()}
+    multivariate_log_likelihood_series(returns, pred)
+    for k in pred:
+        np.testing.assert_array_equal(pred[k], before[k])
+
+
+def test_unusable_sigma_rows_are_counted_in_one_warning(setup):
+    returns, pred = setup
+    sigma = pred["sigma_hat"].copy()
+    sigma[10] = np.diag([1.0, -1.0, 1.0])  # det < 0
+    sigma[11] = 0.0  # singular -> det = 0
+    bad = {"mu_hat": pred["mu_hat"], "sigma_hat": sigma}
+    with pytest.warns(RuntimeWarning, match=r"2 of 24 scorable rows") as rec:
+        ll = multivariate_log_likelihood_series(returns, bad)
+    assert len(rec) == 1
+    assert "Sigma singular or det < 0: 2" in str(rec[0].message)
+    assert ll.iloc[[11, 12]].isna().all()  # moments at t-1 score row t
+
+
+def test_clean_scoring_does_not_warn(setup):
+    returns, pred = setup
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # rows before investment are expected
+        multivariate_log_likelihood_series(returns, pred)
+        mahalanobis_distance_series(returns, pred)
