@@ -109,9 +109,7 @@ def test_minimum_variance_window_longer_than_burn_in_delays_start(returns):
 def test_historical_moments_and_weights(returns):
     pred, w = air.historical_expectations_weights(returns, FIRST)
     t = 70
-    rows = _window_rows(
-        returns, t, FIRST
-    )  # currently a rolling window of length start
+    rows = returns.iloc[: t + 1]  # expanding: every return up to and incl. t
     assert np.allclose(pred["mu_hat"][t], rows.mean())
     assert np.allclose(pred["sigma_hat"][t], rows.cov())
     _assert_nan_layout(w, FIRST)

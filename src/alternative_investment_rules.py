@@ -78,16 +78,14 @@ def historical_expectations_weights(
     returns_df: pd.DataFrame,
     start: int,
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
-    """Compute historical means and covariances across time.
-
-    Currently a rolling window of length `start`, not expanding (TOOLING_TODO).
-    """
+    """Sample mean and covariance of all returns up to and including t
+    (expanding window from row 0), from `start` on."""
     T, n = returns_df.shape
     mu_hat = np.full((T, n), np.nan)
     sigma_hat = np.full((T, n, n), np.nan)
 
     for t in range(start, T):
-        ret_window = returns_df.iloc[t - start + 1 : t + 1]
+        ret_window = returns_df.iloc[: t + 1]
         mu_hat[t] = ret_window.mean().values
         sigma_hat[t] = ret_window.cov().values  # auto set c = w-1
 

@@ -16,6 +16,8 @@ Deliberate differences from the FYP code (reference regenerated from post-fyp):
   columns in log_likelihood / mahalanobis / rolling_sharpe and their rows in
   scalars. Bayesian, possibilistic, 1/N, market: bit for bit (checked per
   strategy). reference.npz (real necessity) still has the pre-fix values.
+- 2026-11-16 historical: truly expanding (iloc[:t+1]), was a rolling window
+  of length start. Only historical_expanding (+ long-only) changed.
 
 When a result-changing fix lands on purpose, check that only the expected keys
 differ (run make_snapshots.py --compare), then regenerate the reference from the
