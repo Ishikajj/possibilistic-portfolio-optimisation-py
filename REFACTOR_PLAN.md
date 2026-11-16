@@ -235,7 +235,7 @@ Necessity is being removed from the project. No unit tests for this file.
 ### 2.9 `possibilistic_bayesian.py` — [x] tests drafted 2026-11-13 (necessity bypassed)
 Tests (`tests/test_possibilistic_bayesian.py`, 21 passing + 3 xfail = logged bugs): newborn prior = pooled sample mean / variance, newborn possibility 1 with κ=ν=1, log score == docstring formula, possibility update == sup-normalised Bayes (max 1), all-invalid → ones, NIW update identical to Bayesian, pruning (under cap, top-k by possibility, length check), merge of two models (statistics, ν floor), Hellinger (0 for identical, symmetric, 1-D closed form), merge core (close pair merged, far kept, ν bandwidth), aggregation (single model = its mode, scale-invariant weights, κ-weighted mean), `run_core` with necessity = 1 (all three outputs identical, NaN layout, diagnostics, pool ≤ max_models, weights == Markowitz, Σ̂ SPD, **no look-ahead**).
 `tests/test_snapshots.py` also covers `run_core` end to end against the FYP code.
-Bugs (TOOLING_TODO, xfail tests): weights start at row 500 not 1000; `keep_newest` pruning evicts the wrong model (also Bayesian); Mahalanobis merge distance √2 off (only `results_cpu` used it).
+Bugs (TOOLING_TODO, xfail tests): ~~weights start at row 500 not 1000~~ fixed 2026-11-16; `keep_newest` pruning evicts the wrong model (also Bayesian); Mahalanobis merge distance √2 off (only `results_cpu` used it).
 
 Edge-case notes:
 - [?] Merging floors ν at n+2, but newborn possibilistic models start at ν=1 → merging two young models jumps ν up.

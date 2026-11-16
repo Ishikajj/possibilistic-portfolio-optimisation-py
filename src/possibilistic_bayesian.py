@@ -638,8 +638,8 @@ def run_core(
     Args:
         returns_df: (T, n) DataFrame of excess returns in decimals, numeric columns only.
         burn_in: periods used to initialise sum_R / sum_R2 before model birth begins.
-        start: first row with weights (None = burn_in). Currently ignored:
-            weights start at burn_in (bug, TOOLING_TODO, fixed in 2.9).
+        start: first row with weights (None = burn_in). Forecasts start at
+            burn_in: rows burn_in … start-1 are warm-up (learning, no weights).
         merge_threshold: Hellinger distance below which two models are merged.
         max_models: maximum pool size after pruning each step.
         keep_newest: if True, always retain the newborn model after pruning.
@@ -799,9 +799,7 @@ def run_core(
     )
     exp_predictive = make_predictive(mu_hat_arr_exp, sigma_hat_arr_exp, index)
 
-    # BUG (TOOLING_TODO, fix in 2.9): should be `start`, like every other
-    # strategy; weights start at burn_in (kept for now: snapshot bit for bit).
-    weights_start = burn_in
+    weights_start = burn_in if start is None else start
     weights_masked = markowitz_unconstrained(
         masked_predictive, returns_df, start=weights_start
     )

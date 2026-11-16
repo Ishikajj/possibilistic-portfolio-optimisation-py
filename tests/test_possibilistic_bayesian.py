@@ -327,10 +327,11 @@ def test_run_core_uses_returns_up_to_t_only(no_necessity, returns):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="TOOLING_TODO bug: possibilistic weights start at burn_in, not at start",
-)
 def test_run_core_weights_start_at_start(no_necessity, returns):
-    *_, w_e = pb.run_core(returns, **RUN)
-    assert w_e.iloc[:60].isna().all().all()
+    """Forecasts from burn_in (warm-up), weights only from start."""
+    _, masked, w_m, _, w_p, _, w_e = pb.run_core(returns, **RUN)
+    burn, start = RUN["burn_in"], RUN["start"]
+    assert np.isfinite(masked["mu_hat"][burn:start]).all()
+    for w in (w_m, w_p, w_e):
+        assert w.iloc[:start].isna().all().all()
+        assert w.iloc[start:-1].notna().all().all()
