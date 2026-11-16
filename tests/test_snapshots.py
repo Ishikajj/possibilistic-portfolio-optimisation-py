@@ -10,6 +10,12 @@ Deliberate differences from the FYP code (reference regenerated from post-fyp):
 - 2026-11-16 log_likelihood, mahalanobis (+ avg_log_likelihood, avg_mahalanobis
   in scalars): no 1e-10 * I added to Sigma before scoring (max rel. diff 6e-4,
   near-singular benchmark covariances); same NaN pattern. reference.npz too.
+- 2026-11-16 benchmark timing: minimum variance, historical, rolling (long +
+  short), Jorion, Kan-Zhou estimate at t from returns up to and including t
+  (were up to t-1). Changed: their forecasts, weights (+ long-only), their
+  columns in log_likelihood / mahalanobis / rolling_sharpe and their rows in
+  scalars. Bayesian, possibilistic, 1/N, market: bit for bit (checked per
+  strategy). reference.npz (real necessity) still has the pre-fix values.
 
 When a result-changing fix lands on purpose, check that only the expected keys
 differ (run make_snapshots.py --compare), then regenerate the reference from the

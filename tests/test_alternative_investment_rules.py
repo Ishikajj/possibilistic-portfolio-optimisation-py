@@ -1,8 +1,7 @@
 """Tests for alternative_investment_rules.py — benchmark strategies.
 
-Window timing: these tests pin the CURRENT behaviour (estimates at t use returns
-up to t-1, i.e. iloc[t-w:t]). TOOLING_TODO has a decided fix to include t; when
-that lands, the `_window_rows` helper below flips and these tests get updated.
+Window timing: estimates at t use the w returns up to and including t, i.e.
+iloc[t-w+1 : t+1] (`_window_rows`). Until 2026-11-16 they stopped at t-1.
 """
 
 import numpy as np
@@ -27,8 +26,8 @@ def returns() -> pd.DataFrame:
 
 
 def _window_rows(returns: pd.DataFrame, t: int, w: int) -> pd.DataFrame:
-    """Rows used for the estimate at t (current behaviour: up to t-1)."""
-    return returns.iloc[t - w : t]
+    """Rows used for the estimate at t: the w returns up to and including t."""
+    return returns.iloc[t - w + 1 : t + 1]
 
 
 def _assert_nan_layout(weights: pd.DataFrame, first: int) -> None:

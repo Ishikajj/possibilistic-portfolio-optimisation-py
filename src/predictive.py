@@ -15,7 +15,7 @@ Timing convention (the whole pipeline):
                       (weights.shift(1)) and _gaussian_terms (returns[1:] vs
                       mu_hat[:-1]).
     Never use t+1 when building row t. tests/test_timing.py checks this for
-    every algorithm (benchmarks still stop at t-1: TOOLING_TODO, xfail there).
+    every algorithm.
 check_aligned only checks that forecast and returns are the same rows (same
 labels, same order); the timing above is a convention, enforced by those tests.
 

@@ -7,10 +7,8 @@ up to AND including t, and is for day t+1. Two checks per algorithm:
 - uses day t:    changing only the return at t leaves rows < t unchanged and
                  changes row t.
 
-The benchmarks currently stop at t-1 (iloc[t-w:t]; TOOLING_TODO, decided fix),
-so their "uses day t" test is xfail(strict=True): once the fix lands they pass
-and the mark must go. 1/N and market weights don't use returns, so they only
-get the look-ahead test.
+1/N and market weights don't use returns, so they only get the look-ahead test.
+(The benchmarks stopped at t-1 until 2026-11-16; the "uses day t" test caught it.)
 
 End to end: the whole pipeline + evaluation (pipeline_wrapper, Markowitz incl.
 long-only, saved files, evaluation_pipeline metrics) gets the same look-ahead
@@ -83,13 +81,6 @@ ALGOS = {
     "possibilistic": _possibilistic,
 }
 IGNORE_RETURNS = {"equal_weight", "market_weight"}
-LAGGED = {  # estimates at t use returns up to t-1 (TOOLING_TODO)
-    "minimum_variance",
-    "historical_expanding",
-    "rolling_window",
-    "jorion_bayes_stein",
-    "kan_zhou_three_fund",
-}
 
 
 def _assert_same_rows(a, b, rows: slice) -> None:
@@ -116,20 +107,7 @@ def test_no_look_ahead(name, returns):
 
 
 @pytest.mark.parametrize(
-    "name",
-    [
-        pytest.param(
-            name,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="TOOLING_TODO: benchmarks use returns up to t-1, not t",
-            ),
-        )
-        if name in LAGGED
-        else name
-        for name in ALGOS
-        if name not in IGNORE_RETURNS
-    ],
+    "name", [name for name in ALGOS if name not in IGNORE_RETURNS]
 )
 def test_uses_return_at_t(name, returns):
     changed = returns.copy()

@@ -6,6 +6,21 @@ How we work: one file at a time → outline tests → write + run them → list 
 Main goal: remove duplication and confusing structure; edge cases second.
 Nothing gets changed without a yes.
 
+## Done when (finish line before the paper extension, agreed 2026-11-16)
+
+1. Known errors fixed: benchmark timing t-1 → t (test_timing xfails removed),
+   "historical" truly expanding, possibilistic start row (2.9), P4 decided.
+2. Every remaining Part 2 section done to its agreed points (2.5–2.11).
+   Nothing new is added unless it's a bug.
+3. Dead code decided: necessity + `necessity_archive/`, and possibilistic's
+   future given the move to Bayesian averaging.
+4. `TOOLING_TODO.md` has nothing open under Primary; the rest is marked "after
+   the paper".
+5. One full rerun on the cleaned code, snapshot reference regenerated: the
+   baseline the extension starts from.
+
+Anything not on this list goes to `TOOLING_TODO.md` as "after the paper".
+
 `[ ]` open · `[x]` done · `[?]` needs your decision · `[~]` deferred
 
 ---

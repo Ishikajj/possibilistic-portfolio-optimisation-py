@@ -16,8 +16,7 @@ Predictive moments + weights (tuple[mu_sigma_dict, pd.DataFrame]):
 All functions take `start`, the first row with weights (the pipeline computes
 burn_in + periods_until_investment once). Weights are NaN before start and on the
 last row (weights at t apply to returns at t+1; timing convention: predictive.py).
-Known deviation: estimates at t currently use returns up to t-1 (iloc[t-w:t]),
-not up to t like the averaging methods (TOOLING_TODO; xfail in test_timing.py).
+Estimates at t use the w returns up to and including t: iloc[t-w+1 : t+1].
 mu_sigma_dict: predictive.make_predictive dict ("mu_hat", "sigma_hat", "index" = returns_df.index).
 """
 
@@ -88,7 +87,7 @@ def historical_expectations_weights(
     sigma_hat = np.full((T, n, n), np.nan)
 
     for t in range(start, T):
-        ret_window = returns_df.iloc[t - start : t]
+        ret_window = returns_df.iloc[t - start + 1 : t + 1]
         mu_hat[t] = ret_window.mean().values
         sigma_hat[t] = ret_window.cov().values  # auto set c = w-1
 
@@ -112,7 +111,7 @@ def rolling_window_weights(
     sigma_hat = np.full((T, n, n), np.nan)
 
     for t in range(max(window, start), T):
-        ret_window = returns_df.iloc[t - window : t]
+        ret_window = returns_df.iloc[t - window + 1 : t + 1]
         mu_hat[t] = ret_window.mean().values
         sigma_hat[t] = ret_window.cov().values
 
@@ -184,7 +183,7 @@ def minimum_variance_strategy(
     end = T - 1  # last row excluded
 
     for t in range(max(window, start), end):
-        ret_window = returns_df.iloc[t - window : t]
+        ret_window = returns_df.iloc[t - window + 1 : t + 1]
         sigma_hat_t = ret_window.cov().values
         inv_sigma = np.linalg.inv(sigma_hat_t)
         w = inv_sigma @ np.ones(n)
@@ -236,7 +235,7 @@ def jorion_bayes_stein_estimates(
     c = w - n - 2
 
     for t in range(start, end):
-        ret_window = returns_df.iloc[t - w : t]
+        ret_window = returns_df.iloc[t - w + 1 : t + 1]
         mu_t = ret_window.mean().values
 
         # pandas cov(ddof=1) gives (1/(w-1)) S; paper uses (1/c) S
@@ -345,7 +344,7 @@ def kan_zhou_three_fund_estimates(
     b = (w + 1.0) / 2.0
 
     for t in range(start, end):
-        ret_window = returns_df.iloc[t - w : t]
+        ret_window = returns_df.iloc[t - w + 1 : t + 1]
         mu_t = ret_window.mean().values
 
         # MLE covariance (c=w)
