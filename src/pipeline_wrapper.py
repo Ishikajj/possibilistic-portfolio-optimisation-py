@@ -38,7 +38,13 @@ from alternative_investment_rules import (
     minimum_variance_strategy,
     rolling_window_weights,
 )
-from config import RF_PATH
+from config import (
+    RF_PATH,
+    SIM_DATA_DIR,
+    SIM_N_ASSETS,
+    SIM_SEED,
+    SIM_T,
+)
 from data_input import load_excess_returns, prepare_returns
 from predictive import save_predictive
 
@@ -512,10 +518,8 @@ def call_all_simulated_datasets(
 
 
 def main_simulated():
-    SIM_DATA_DIR = Path("../datasets/simulated")
-    SIM_T = 10000
-    SIM_N = 10
-    SIM_SEED = 42
+    # File list rebuilt from simulated_datasets in 2.10 (P1 / P2).
+    SIM_N = SIM_N_ASSETS
 
     sim_files = [
         (

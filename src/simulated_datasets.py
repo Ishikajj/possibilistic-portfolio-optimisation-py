@@ -13,13 +13,24 @@ DGPs differ only in how g_t is generated:
   simulate_sudden_covariance_break — g_t vol jumps permanently at break_fraction * T
   simulate_stochastic_volatility   — g_t vol follows a log-OU process
 
-All functions return (portfolios_df, rf_df), integer-indexed, decimal units.
+Every DGP has the signature ``(T, n_assets, seed, *, <its own settings>)``;
+T / n_assets / seed default to config.SIM_T / SIM_N_ASSETS / SIM_SEED, and
+the settings are keyword-only. All return (portfolios_df, rf_df),
+integer-indexed, decimal units.
+
+``DGPS`` maps each file label to its generator; ``sim_paths`` gives the CSV
+paths and ``generate_and_save_sim_datasets`` writes them.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
+from config import SIM_DATA_DIR, SIM_N_ASSETS, SIM_SEED, SIM_T
 
 # -----------------
 # Shared constants (annualised figures scaled to daily)
@@ -27,12 +38,11 @@ import pandas as pd
 
 _MU_BAR = 0.08 / 252.0  # annualised factor mean 8%
 _SIGMA_BAR = 0.16 / np.sqrt(252.0)  # annualised factor vol 16%
-_V_BAR = _SIGMA_BAR**2  # factor variance
 _MU_RF = 0.02 / 252.0  # annualised RF mean 2%
 _SIGMA_RF = 0.02 / np.sqrt(252.0)  # annualised RF vol 2%
 
 # -----------------
-# Simulation helpers
+# Simulation helpers (no defaults: the public DGPs own them)
 # -----------------
 
 
@@ -42,10 +52,7 @@ def _simulate_rf(rng: np.random.Generator, T: int) -> np.ndarray:
 
 
 def _simulate_factor_iid(
-    rng: np.random.Generator,
-    T: int,
-    mu_bar: float = _MU_BAR,
-    sigma_bar: float = _SIGMA_BAR,
+    rng: np.random.Generator, T: int, mu_bar: float, sigma_bar: float
 ) -> np.ndarray:
     """i.i.d. single factor g_t. Returns decimals."""
     return rng.normal(loc=mu_bar, scale=sigma_bar, size=T)
@@ -57,11 +64,11 @@ def _simulate_factor_iid(
 def _simulate_factor_regime_mean(
     rng: np.random.Generator,
     T: int,
+    mu_bar: float,
+    sigma_bar: float,
     p_switch: float,
     rho: float,
     sigma_mu: float,
-    mu_bar: float = _MU_BAR,
-    sigma_bar: float = _SIGMA_BAR,
 ) -> np.ndarray:
     """Single factor with regime changes in its mean (Appendix A, DGP 2).
 
@@ -94,13 +101,59 @@ def _simulate_factor_regime_mean(
     return rng.normal(loc=mu_t, scale=sigma_g, size=T)
 
 
+def _simulate_factor_mean_break(
+    rng: np.random.Generator,
+    T: int,
+    sigma_bar: float,
+    break_fraction: float,
+    mu_pre: float,
+    mu_post: float,
+) -> np.ndarray:
+    """Factor mean jumps from mu_pre to mu_post at break_fraction * T."""
+    break_t = int(T * break_fraction)
+    mu_t = np.where(np.arange(T) < break_t, mu_pre, mu_post)
+    return rng.normal(loc=mu_t, scale=sigma_bar, size=T)
+
+
+def _simulate_factor_mean_reverting(
+    rng: np.random.Generator,
+    T: int,
+    mu_bar: float,
+    sigma_bar: float,
+    theta_mu: float,
+    sigma_mu: float,
+) -> np.ndarray:
+    """Factor mean follows mu_{t+1} = mu_t + theta_mu (mu_bar - mu_t) + sigma_mu eps_t;
+    g_t ~ N(mu_t, sigma_g^2) with total Var(g_t) ≈ sigma_bar^2.
+
+    Raises if the mean's steady-state variance alone reaches sigma_bar^2
+    (theta_mu / sigma_mu incompatible with sigma_bar), like the regime DGP.
+    """
+    steady_state_var_mu = sigma_mu**2 / (2.0 * theta_mu - theta_mu**2)
+    var_g = sigma_bar**2 - steady_state_var_mu
+    if var_g <= 0.0:
+        raise ValueError(
+            "Invalid parameters: sigma_bar^2 - sigma_mu^2/(2 theta_mu - "
+            f"theta_mu^2) must be > 0. Got sigma_bar^2={sigma_bar**2:.6g}, "
+            f"steady-state Var(mu)={steady_state_var_mu:.6g}."
+        )
+    sigma_g = float(np.sqrt(var_g))
+
+    mu_t = np.empty(T, dtype=float)
+    mu_t[0] = mu_bar
+    noise = rng.normal(0.0, sigma_mu, size=T - 1)
+    for t in range(T - 1):
+        mu_t[t + 1] = mu_t[t] + theta_mu * (mu_bar - mu_t[t]) + noise[t]
+    return rng.normal(loc=mu_t, scale=sigma_g, size=T)
+
+
 def _simulate_factor_vol_break(
     rng: np.random.Generator,
     T: int,
-    break_fraction: float = 0.5,
-    sigma_pre: float = 0.10 / np.sqrt(252.0),
-    sigma_post: float = 0.25 / np.sqrt(252.0),
-    mu_bar: float = _MU_BAR,
+    mu_bar: float,
+    break_fraction: float,
+    sigma_pre: float,
+    sigma_post: float,
 ) -> np.ndarray:
     """Factor with constant mean but a permanent jump in volatility at break_fraction * T."""
     break_t = int(T * break_fraction)
@@ -111,19 +164,17 @@ def _simulate_factor_vol_break(
 def _simulate_factor_stochastic_vol(
     rng: np.random.Generator,
     T: int,
-    mu_bar: float = _MU_BAR,
-    v_bar: float = _V_BAR,
-    theta_v: float = 0.05,
-    xi: float = 0.2,
+    mu_bar: float,
+    sigma_bar: float,
+    theta_v: float,
+    xi: float,
 ) -> np.ndarray:
-    """Factor with constant mean and log-OU stochastic variance.
+    """Factor with constant mean and log-OU stochastic variance around sigma_bar^2.
 
     log(v_{t+1}) = log(v_t) + theta_v * (log(v_bar) - log(v_t)) + xi * eps_t
-    g_t ~ N(mu_bar, v_t)
-
-    With theta_v=0.05, half-life ~14 trading days. With xi=0.2, steady-state
-    annualised vol ranges roughly [8%, 30%].
+    g_t ~ N(mu_bar, v_t),  v_bar = sigma_bar^2
     """
+    v_bar = sigma_bar**2
     log_v = np.empty(T, dtype=float)
     log_v[0] = np.log(v_bar)
     log_v_bar = np.log(v_bar)
@@ -159,16 +210,21 @@ def _simulate_factor_model_excess_returns(
     return excess, B
 
 
-def _pack_simulation_frames(
-    excess: np.ndarray,
-    RF: np.ndarray,
+def _simulate(
+    T: int,
+    n_assets: int,
+    seed: int,
+    factor: Callable[..., np.ndarray],
+    **factor_params: float,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return (portfolios_df, rf_df) with integer index."""
-    n_assets = excess.shape[1]
+    """Shared body of every DGP. Draw order (fixed, keeps saved data
+    reproducible): RF, then the factor, then the idiosyncratic noise."""
+    rng = np.random.default_rng(seed)
+    rf = _simulate_rf(rng, T)
+    g = factor(rng, T, **factor_params)
+    excess, _ = _simulate_factor_model_excess_returns(rng, g, n_assets)
     asset_cols = [f"Asset{i + 1}" for i in range(n_assets)]
-    portfolios_df = pd.DataFrame(excess, columns=asset_cols)
-    rf_df = pd.DataFrame({"RF": RF})
-    return portfolios_df, rf_df
+    return pd.DataFrame(excess, columns=asset_cols), pd.DataFrame({"RF": rf})
 
 
 # -----------------
@@ -177,26 +233,31 @@ def _pack_simulation_frames(
 
 
 def simulate_iid(
-    T: int = 252 * 20,
-    n_assets: int = 10,
-    seed: int = 0,
+    T: int = SIM_T,
+    n_assets: int = SIM_N_ASSETS,
+    seed: int = SIM_SEED,
+    *,
+    mu_bar: float = _MU_BAR,
+    sigma_bar: float = _SIGMA_BAR,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """i.i.d. single-factor model (Appendix A, DGP 1).
-
-    Returns (portfolios_df, rf_df): Asset1..AssetN excess returns in decimals,
-    integer-indexed. portfolios_df already contains excess returns.
-    """
-    rng = np.random.default_rng(seed)
-    RF = _simulate_rf(rng, T)
-    g = _simulate_factor_iid(rng, T)
-    excess, _B = _simulate_factor_model_excess_returns(rng, g, n_assets)
-    return _pack_simulation_frames(excess, RF)
+    """i.i.d. single-factor model (Appendix A, DGP 1)."""
+    return _simulate(
+        T,
+        n_assets,
+        seed,
+        _simulate_factor_iid,
+        mu_bar=mu_bar,
+        sigma_bar=sigma_bar,
+    )
 
 
 def simulate_regime_shifts(
-    T: int = 252 * 20,
-    n_assets: int = 10,
-    seed: int = 0,
+    T: int = SIM_T,
+    n_assets: int = SIM_N_ASSETS,
+    seed: int = SIM_SEED,
+    *,
+    mu_bar: float = _MU_BAR,
+    sigma_bar: float = _SIGMA_BAR,
     p_switch: float = 0.5,
     rho: float = 0.95,
     sigma_mu: float = 0.001,
@@ -204,21 +265,27 @@ def simulate_regime_shifts(
     """Factor mean undergoes discrete regime changes (Appendix A, DGP 2).
 
     With probability p_switch the mean jumps to N(mu_bar + rho*(mu_t - mu_bar), sigma_mu^2);
-    otherwise it stays constant. Returns (portfolios_df, rf_df) integer-indexed, decimals.
+    otherwise it stays constant.
     """
-    rng = np.random.default_rng(seed)
-    RF = _simulate_rf(rng, T)
-    g = _simulate_factor_regime_mean(
-        rng=rng, T=T, p_switch=p_switch, rho=rho, sigma_mu=sigma_mu
+    return _simulate(
+        T,
+        n_assets,
+        seed,
+        _simulate_factor_regime_mean,
+        mu_bar=mu_bar,
+        sigma_bar=sigma_bar,
+        p_switch=p_switch,
+        rho=rho,
+        sigma_mu=sigma_mu,
     )
-    excess, _B = _simulate_factor_model_excess_returns(rng, g, n_assets)
-    return _pack_simulation_frames(excess, RF)
 
 
 def simulate_sudden_break(
-    T: int = 252 * 20,
-    n_assets: int = 5,
-    seed: int = 42,
+    T: int = SIM_T,
+    n_assets: int = SIM_N_ASSETS,
+    seed: int = SIM_SEED,
+    *,
+    sigma_bar: float = _SIGMA_BAR,
     break_fraction: float = 0.5,
     mu_pre: float = _MU_BAR,
     mu_post: float = -0.04 / 252.0,
@@ -229,58 +296,58 @@ def simulate_sudden_break(
     The break is abrupt and permanent — models that span the break are actively
     harmful, so strategies that quickly down-weight stale models should win.
     """
-    rng = np.random.default_rng(seed)
-    RF = _simulate_rf(rng, T)
-    break_t = int(T * break_fraction)
-    mu_t = np.where(np.arange(T) < break_t, mu_pre, mu_post)
-    g = rng.normal(loc=mu_t, scale=_SIGMA_BAR, size=T)
-    excess, _ = _simulate_factor_model_excess_returns(rng, g, n_assets)
-    return _pack_simulation_frames(excess, RF)
+    return _simulate(
+        T,
+        n_assets,
+        seed,
+        _simulate_factor_mean_break,
+        sigma_bar=sigma_bar,
+        break_fraction=break_fraction,
+        mu_pre=mu_pre,
+        mu_post=mu_post,
+    )
 
 
 def simulate_mean_reverting_factor(
-    T: int = 252 * 20,
-    n_assets: int = 5,
-    seed: int = 42,
-    theta: float = 0.05,
+    T: int = SIM_T,
+    n_assets: int = SIM_N_ASSETS,
+    seed: int = SIM_SEED,
+    *,
     mu_bar: float = _MU_BAR,
+    sigma_bar: float = _SIGMA_BAR,
+    theta_mu: float = 0.05,
     sigma_mu: float = 0.002,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Factor mean follows a discrete-time OU process (fast mean reversion).
 
-    mu_{t+1} = mu_t + theta * (mu_bar - mu_t) + sigma_mu * eps_t
+    mu_{t+1} = mu_t + theta_mu * (mu_bar - mu_t) + sigma_mu * eps_t
 
-    With theta=0.05, the half-life is ~14 trading days.  Short-window models
+    With theta_mu=0.05, the half-life is ~14 trading days.  Short-window models
     consistently out-predict long-window models because recent data is far more
     informative about the current factor mean.  Tests whether model averaging
     concentrates weight on fresh models.
     """
-    rng = np.random.default_rng(seed)
-    RF = _simulate_rf(rng, T)
-
-    mu_t = np.empty(T, dtype=float)
-    mu_t[0] = mu_bar
-    noise = rng.normal(0.0, sigma_mu, size=T - 1)
-    for t in range(T - 1):
-        mu_t[t + 1] = mu_t[t] + theta * (mu_bar - mu_t[t]) + noise[t]
-
-    # Keep total Var(g_t) ≈ _SIGMA_BAR^2
-    steady_state_var_mu = sigma_mu**2 / (2.0 * theta - theta**2)
-    sigma_g = float(np.sqrt(max(_SIGMA_BAR**2 - steady_state_var_mu, 1e-8)))
-    g = rng.normal(loc=mu_t, scale=sigma_g, size=T)
-
-    excess, _ = _simulate_factor_model_excess_returns(rng, g, n_assets)
-    return _pack_simulation_frames(excess, RF)
+    return _simulate(
+        T,
+        n_assets,
+        seed,
+        _simulate_factor_mean_reverting,
+        mu_bar=mu_bar,
+        sigma_bar=sigma_bar,
+        theta_mu=theta_mu,
+        sigma_mu=sigma_mu,
+    )
 
 
 def simulate_sudden_covariance_break(
-    T: int = 252 * 20,
-    n_assets: int = 5,
-    seed: int = 42,
+    T: int = SIM_T,
+    n_assets: int = SIM_N_ASSETS,
+    seed: int = SIM_SEED,
+    *,
+    mu_bar: float = _MU_BAR,
     break_fraction: float = 0.5,
     sigma_pre: float = 0.10 / np.sqrt(252.0),
     sigma_post: float = 0.25 / np.sqrt(252.0),
-    mu_bar: float = _MU_BAR,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Permanent jump in factor volatility at break_fraction * T; mean is constant.
 
@@ -288,34 +355,92 @@ def simulate_sudden_covariance_break(
     Sigma_t = B B' sigma_g_t^2 + Diag(sigma_idio^2) jumps at the break.
     Mirrors DGP 3 (sudden_break) but in covariance rather than mean.
     """
-    rng = np.random.default_rng(seed)
-    RF = _simulate_rf(rng, T)
-    g = _simulate_factor_vol_break(
-        rng, T, break_fraction, sigma_pre, sigma_post, mu_bar
+    return _simulate(
+        T,
+        n_assets,
+        seed,
+        _simulate_factor_vol_break,
+        mu_bar=mu_bar,
+        break_fraction=break_fraction,
+        sigma_pre=sigma_pre,
+        sigma_post=sigma_post,
     )
-    excess, _ = _simulate_factor_model_excess_returns(rng, g, n_assets)
-    return _pack_simulation_frames(excess, RF)
 
 
 def simulate_stochastic_volatility(
-    T: int = 252 * 20,
-    n_assets: int = 5,
-    seed: int = 42,
+    T: int = SIM_T,
+    n_assets: int = SIM_N_ASSETS,
+    seed: int = SIM_SEED,
+    *,
     mu_bar: float = _MU_BAR,
-    v_bar: float = _V_BAR,
+    sigma_bar: float = _SIGMA_BAR,
     theta_v: float = 0.05,
     xi: float = 0.2,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Constant factor mean with log-OU stochastic volatility.
+    """Constant factor mean with log-OU stochastic volatility around sigma_bar.
 
-    log(v_{t+1}) = log(v_t) + theta_v*(log(v_bar) - log(v_t)) + xi*eps_t
+    log(v_{t+1}) = log(v_t) + theta_v*(log(sigma_bar^2) - log(v_t)) + xi*eps_t
 
-    With theta_v=0.05, half-life ~14 trading days.  Covariance varies
-    continuously; tests whether model averaging tracks volatility clustering.
+    With theta_v=0.05, half-life ~14 trading days; with xi=0.2, annualised
+    vol ranges roughly [8%, 30%].  Covariance varies continuously; tests
+    whether model averaging tracks volatility clustering.
     Mirrors DGP 4 (mean_reverting) but in covariance rather than mean.
     """
-    rng = np.random.default_rng(seed)
-    RF = _simulate_rf(rng, T)
-    g = _simulate_factor_stochastic_vol(rng, T, mu_bar, v_bar, theta_v, xi)
-    excess, _ = _simulate_factor_model_excess_returns(rng, g, n_assets)
-    return _pack_simulation_frames(excess, RF)
+    return _simulate(
+        T,
+        n_assets,
+        seed,
+        _simulate_factor_stochastic_vol,
+        mu_bar=mu_bar,
+        sigma_bar=sigma_bar,
+        theta_v=theta_v,
+        xi=xi,
+    )
+
+
+# -----------------
+# Registry and saved datasets
+# -----------------
+
+# File label -> generator. The labels name the saved CSVs and the pipeline's
+# result folders.
+DGPS: dict[str, Callable[..., tuple[pd.DataFrame, pd.DataFrame]]] = {
+    "iid": simulate_iid,
+    "reg": simulate_regime_shifts,
+    "break": simulate_sudden_break,
+    "mr": simulate_mean_reverting_factor,
+    "cov_break": simulate_sudden_covariance_break,
+    "stoch_vol": simulate_stochastic_volatility,
+}
+
+
+def sim_paths(
+    label: str,
+    T: int = SIM_T,
+    n_assets: int = SIM_N_ASSETS,
+    seed: int = SIM_SEED,
+    data_dir: Path | None = None,
+) -> tuple[Path, Path]:
+    """(returns CSV, RF CSV) for a saved dataset:
+    ``<label>_T<T>_N<n>_seed<seed>.csv`` and ``rf_<same>``."""
+    tag = f"{label}_T{T}_N{n_assets}_seed{seed}.csv"
+    data_dir = SIM_DATA_DIR if data_dir is None else Path(data_dir)
+    return data_dir / tag, data_dir / f"rf_{tag}"
+
+
+def generate_and_save_sim_datasets(
+    labels: list[str] | None = None,
+    T: int = SIM_T,
+    n_assets: int = SIM_N_ASSETS,
+    seed: int = SIM_SEED,
+    data_dir: Path | None = None,
+) -> None:
+    """Generate the DGPs in ``labels`` (``None`` = all of DGPS) and save
+    returns and RF as CSVs (decimals, no index) at ``sim_paths``."""
+    for label in DGPS if labels is None else labels:
+        ports_path, rf_path = sim_paths(label, T, n_assets, seed, data_dir)
+        ports_path.parent.mkdir(parents=True, exist_ok=True)
+        portfolios_df, rf_df = DGPS[label](T=T, n_assets=n_assets, seed=seed)
+        portfolios_df.to_csv(ports_path, index=False)
+        rf_df.to_csv(rf_path, index=False)
+        print(f"  saved {ports_path.name}, {rf_path.name}")

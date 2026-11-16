@@ -23,21 +23,9 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config import DATASETS_DIR, SIM_N_ASSETS, SIM_SEED, SIM_T
 from data_input import load_portfolios
-from simulated_datasets import (
-    simulate_iid,
-    simulate_mean_reverting_factor,
-    simulate_regime_shifts,
-    simulate_stochastic_volatility,
-    simulate_sudden_break,
-    simulate_sudden_covariance_break,
-)
-
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-
-DATASETS_DIR = Path(__file__).resolve().parent.parent.parent / "datasets"
+from simulated_datasets import generate_and_save_sim_datasets, sim_paths
 
 # ---------------------------------------------------------------------------
 # Portfolio configuration
@@ -200,110 +188,33 @@ def build_panel(
 # Simulated datasets
 # ---------------------------------------------------------------------------
 
-SIM_DATA_DIR = DATASETS_DIR / "simulated"
-
-
-@dataclass
-class SimConfig:
-    name: str
-    label: str
-    sim_func: object  # callable: (T, n_assets, seed, **kwargs) -> (portfolios_df, rf_df)
-    kwargs: dict  # extra keyword arguments forwarded to sim_func
-
-
-SIM_CONFIGS: list[SimConfig] = [
-    SimConfig(
-        name="IID",
-        label="iid",
-        sim_func=simulate_iid,
-        kwargs={},
-    ),
-    SimConfig(
-        name="Regime shifts",
-        label="reg",
-        sim_func=simulate_regime_shifts,
-        kwargs={},
-    ),
-    SimConfig(
-        name="Sudden break",
-        label="break",
-        sim_func=simulate_sudden_break,
-        kwargs={},
-    ),
-    SimConfig(
-        name="Mean reverting",
-        label="mr",
-        sim_func=simulate_mean_reverting_factor,
-        kwargs={},
-    ),
-    SimConfig(
-        name="Covariance break",
-        label="cov_break",
-        sim_func=simulate_sudden_covariance_break,
-        kwargs={},
-    ),
-    SimConfig(
-        name="Stochastic volatility",
-        label="stoch_vol",
-        sim_func=simulate_stochastic_volatility,
-        kwargs={},
-    ),
-]
-
-
-def _sim_csv_path(config: SimConfig, T: int, n_assets: int, seed: int) -> Path:
-    """Canonical path for a saved simulated dataset."""
-    return SIM_DATA_DIR / f"{config.label}_T{T}_N{n_assets}_seed{seed}.csv"
-
-
-def _sim_rf_csv_path(
-    config: SimConfig, T: int, n_assets: int, seed: int
-) -> Path:
-    """Canonical path for the RF series paired with a simulated dataset."""
-    return SIM_DATA_DIR / f"rf_{config.label}_T{T}_N{n_assets}_seed{seed}.csv"
-
-
-def generate_and_save_sim_datasets(
-    configs: list[SimConfig] = SIM_CONFIGS,
-    T: int = 6000,
-    n_assets: int = 5,
-    seed: int = 42,
-) -> None:
-    """
-    Generate all simulated datasets and persist them to CSV.
-
-    CSVs are stored in decimal form (exactly as the sim functions return them)
-    so they can also be fed directly into the pipeline. Re-run this function
-    whenever T / n_assets / seed change.
-    """
-    SIM_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    for cfg in configs:
-        out_path = _sim_csv_path(cfg, T, n_assets, seed)
-        rf_out_path = _sim_rf_csv_path(cfg, T, n_assets, seed)
-        portfolios_df, rf_df = cfg.sim_func(
-            T=T, n_assets=n_assets, seed=seed, **cfg.kwargs
-        )
-        portfolios_df.to_csv(out_path, index=False)
-        rf_df.to_csv(rf_out_path, index=False)
-        print(f"  saved {out_path.name}")
-        print(f"  saved {rf_out_path.name}")
+# Table name per simulated DGP (keys = simulated_datasets.DGPS labels).
+SIM_NAMES: dict[str, str] = {
+    "iid": "IID",
+    "reg": "Regime shifts",
+    "break": "Sudden break",
+    "mr": "Mean reverting",
+    "cov_break": "Covariance break",
+    "stoch_vol": "Stochastic volatility",
+}
 
 
 def load_sim_pct(
-    config: SimConfig,
-    T: int = 6000,
-    n_assets: int = 10,
-    seed: int = 42,
+    label: str,
+    T: int = SIM_T,
+    n_assets: int = SIM_N_ASSETS,
+    seed: int = SIM_SEED,
+    data_dir: Path | None = None,
 ) -> pd.DataFrame:
     """
     Load a saved simulated dataset and return it in raw percentage terms.
 
     Raises FileNotFoundError if the CSV has not been generated yet —
-    call generate_and_save_sim_datasets() first.
+    call simulated_datasets.generate_and_save_sim_datasets() first.
     Sim functions save decimals; multiply by 100 so compute_stats produces
     the same units as the Ken French panels.
     """
-    csv_path = _sim_csv_path(config, T, n_assets, seed)
+    csv_path, _ = sim_paths(label, T, n_assets, seed, data_dir)
     if not csv_path.exists():
         raise FileNotFoundError(
             f"Simulated dataset not found: {csv_path}\n"
@@ -316,17 +227,18 @@ def load_sim_pct(
 
 
 def build_sim_panel(
-    configs: list[SimConfig] = SIM_CONFIGS,
-    T: int = 6000,
-    n_assets: int = 10,
-    seed: int = 42,
+    labels: list[str] | None = None,
+    T: int = SIM_T,
+    n_assets: int = SIM_N_ASSETS,
+    seed: int = SIM_SEED,
+    data_dir: Path | None = None,
 ) -> pd.DataFrame:
-    """Return a tidy DataFrame of Table 1 rows for the simulated-data panel."""
+    """Table 1 rows for the simulated-data panel (``None`` = all DGPs)."""
     rows = []
-    for cfg in configs:
-        df = load_sim_pct(cfg, T=T, n_assets=n_assets, seed=seed)
+    for label in SIM_NAMES if labels is None else labels:
+        df = load_sim_pct(label, T, n_assets, seed, data_dir)
         stats = compute_stats(df)
-        rows.append({"Name": cfg.name, "Label": cfg.label, **stats})
+        rows.append({"Name": SIM_NAMES[label], "Label": label, **stats})
 
     return pd.DataFrame(rows).rename(
         columns={
@@ -353,23 +265,15 @@ if __name__ == "__main__":
     START = "1980-01-01"
     END = None
 
-    # --- Simulation parameters ---
-    SIM_T = 10000
-    SIM_N_ASSETS = 10
-    SIM_SEED = 42
+    # Simulated data: size and seed from config.SIM_T / SIM_N_ASSETS / SIM_SEED.
     # Set REGENERATE = True to overwrite existing simulated CSVs
     REGENERATE = True
 
     # Generate simulated CSVs if missing (or forced)
-    missing = any(
-        not _sim_csv_path(c, SIM_T, SIM_N_ASSETS, SIM_SEED).exists()
-        for c in SIM_CONFIGS
-    )
+    missing = any(not sim_paths(label)[0].exists() for label in SIM_NAMES)
     if missing or REGENERATE:
         print("Generating simulated datasets...")
-        generate_and_save_sim_datasets(
-            T=SIM_T, n_assets=SIM_N_ASSETS, seed=SIM_SEED
-        )
+        generate_and_save_sim_datasets(list(SIM_NAMES))
 
     print("Building Panel A (value-weighted)...")
     panel_a = build_panel(PORTFOLIO_CONFIGS, "value", START, END)
@@ -378,7 +282,7 @@ if __name__ == "__main__":
     panel_b = build_panel(PORTFOLIO_CONFIGS, "equal", START, END)
 
     print("Building Panel C (simulated)...")
-    panel_c = build_sim_panel(T=SIM_T, n_assets=SIM_N_ASSETS, seed=SIM_SEED)
+    panel_c = build_sim_panel()
 
     print("\n--- Panel A ---")
     print(panel_a.to_string(index=False))

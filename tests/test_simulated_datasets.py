@@ -10,14 +10,29 @@ import simulated_datasets as sd
 
 SIM_DIR = Path(__file__).resolve().parents[2] / "datasets" / "simulated"
 
-DGPS = {
-    "iid": sd.simulate_iid,
-    "reg": sd.simulate_regime_shifts,
-    "break": sd.simulate_sudden_break,
-    "mr": sd.simulate_mean_reverting_factor,
-    "cov_break": sd.simulate_sudden_covariance_break,
-    "stoch_vol": sd.simulate_stochastic_volatility,
-}
+DGPS = sd.DGPS
+
+
+def test_registry_lists_the_six_saved_dgps():
+    assert list(DGPS) == ["iid", "reg", "break", "mr", "cov_break", "stoch_vol"]
+
+
+@pytest.mark.parametrize("name", DGPS)
+def test_defaults_come_from_config(name):
+    import inspect
+
+    from config import SIM_N_ASSETS, SIM_SEED, SIM_T
+
+    params = inspect.signature(DGPS[name]).parameters
+    assert params["T"].default == SIM_T
+    assert params["n_assets"].default == SIM_N_ASSETS
+    assert params["seed"].default == SIM_SEED
+    # DGP-specific settings are keyword-only
+    assert all(
+        p.kind is p.KEYWORD_ONLY
+        for n, p in params.items()
+        if n not in ("T", "n_assets", "seed")
+    )
 
 
 @pytest.mark.parametrize("name", DGPS)
@@ -63,19 +78,45 @@ def test_sudden_break_switches_mean_at_break_point():
 
 
 def test_covariance_break_raises_vol_after_break():
-    g = sd._simulate_factor_vol_break(np.random.default_rng(0), T=20_000)
+    g = sd._simulate_factor_vol_break(
+        np.random.default_rng(0),
+        T=20_000,
+        mu_bar=sd._MU_BAR,
+        break_fraction=0.5,
+        sigma_pre=0.10 / np.sqrt(252.0),
+        sigma_post=0.25 / np.sqrt(252.0),
+    )
     assert g[10_000:].std() > 2 * g[:10_000].std()  # 25% vs 10% annual vol
 
 
 def test_regime_mean_rejects_impossible_variance():
     with pytest.raises(ValueError):
         sd._simulate_factor_regime_mean(
-            np.random.default_rng(0), T=10, p_switch=0.5, rho=0.0, sigma_mu=1.0
+            np.random.default_rng(0),
+            T=10,
+            mu_bar=sd._MU_BAR,
+            sigma_bar=sd._SIGMA_BAR,
+            p_switch=0.5,
+            rho=0.0,
+            sigma_mu=1.0,
         )
 
 
+def test_mean_reverting_rejects_impossible_variance():
+    # steady-state Var(mu) = 0.0032^2 / 0.0975 ≈ 1.05e-4 > sigma_bar^2 ≈ 1.02e-4
+    with pytest.raises(ValueError, match="steady-state"):
+        sd.simulate_mean_reverting_factor(T=10, sigma_mu=0.0032)
+
+
 def test_stochastic_vol_variance_is_positive_and_varies():
-    g = sd._simulate_factor_stochastic_vol(np.random.default_rng(0), T=5000)
+    g = sd._simulate_factor_stochastic_vol(
+        np.random.default_rng(0),
+        T=5000,
+        mu_bar=sd._MU_BAR,
+        sigma_bar=sd._SIGMA_BAR,
+        theta_v=0.05,
+        xi=0.2,
+    )
     rolling = pd.Series(g).rolling(100).std().dropna()
     assert rolling.max() > 1.5 * rolling.min()
 
@@ -87,8 +128,9 @@ def test_stochastic_vol_variance_is_positive_and_varies():
 def test_generators_reproduce_saved_datasets(name):
     """Snapshot: today's code regenerates the CSVs used for the FYP exactly."""
     ports, rf = DGPS[name](T=10_000, n_assets=10, seed=42)
-    tag = f"{name}_T10000_N10_seed42.csv"
-    disk = pd.read_csv(SIM_DIR / tag, float_precision="round_trip")
-    disk_rf = pd.read_csv(SIM_DIR / f"rf_{tag}", float_precision="round_trip")
+    ports_path, rf_path = sd.sim_paths(name, T=10_000, n_assets=10, seed=42)
+    assert ports_path.name == f"{name}_T10000_N10_seed42.csv"
+    disk = pd.read_csv(ports_path, float_precision="round_trip")
+    disk_rf = pd.read_csv(rf_path, float_precision="round_trip")
     np.testing.assert_array_equal(ports.values, disk.values)
     np.testing.assert_array_equal(rf.values, disk_rf.values)

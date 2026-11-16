@@ -195,10 +195,20 @@ Edge-case notes:
 - [x] Scoring is Gaussian even though NIW predictives are Student-t — kept (same rule for all strategies; benchmarks have no t predictive); module docstring says so (2026-11-16).
 - [x] Default `regularization=1e-10` was added to Σ before scoring → **removed** (2026-11-16): a singular / non-PD Σ makes the row invalid (NaN, counted in the warning) instead of being scored on ε·I (extreme values that can dominate an average). Not negligible: VW benchmark Σ have smallest eigenvalues down to ~1e-9, so FYP avg log-lik moves in the 2nd decimal (e.g. 10-Industry VW rolling-short 42.4805 → 42.4662), no rows lost, no ranking change; Bayesian / possibilistic unchanged (min eigenvalue ≥ 1e-6). Snapshot reference regenerated (log-lik / Mahalanobis keys only).
 
+### Order from here (agreed 2026-11-16, after 2.11)
+2.6 → argument design (written up once for 2.5, 2.7 and 2.9) → 2.5 → 2.7 / 2.9 (with their TOOLING_TODO bugs) → 2.10 pipeline P1 / P2 (built on the argument design). Each result-changing fix: own commit, snapshot regenerated.
+
 ### 2.5 `alternative_investment_rules.py` — [x] tests drafted 2026-11-13
 Tests (`tests/test_alternative_investment_rules.py`, 17 passing): incomplete beta vs numerical integral, `_solve_or_pinv` singular fallback, min-variance mean target = GMV portfolio mean, 1/N, market (and KeyError without `Mkt-RF`), min-variance vs Σ⁻¹1 normalised + delayed start when window > burn-in, historical and rolling moments + weights, **Jorion vs an independent implementation of the 1986 formulas**, Jorion shrinkage in (0,1) + strategy uses μ*/Σ*, Kan-Zhou Σ (MLE), μ* convex combination, h formula, strategy weights = (h/θ)Σ⁻¹μ*, window-too-short errors.
 Window timing tests pin the CURRENT t-1 windows via one helper `_window_rows` → flips with the TODO fix.
 Bugs / checks (TOOLING_TODO): Kan-Zhou saved mean scaled by h; verify Kan-Zhou beta parameters vs paper. Existing: benchmarks one day behind; "historical expanding" is rolling.
+
+- [ ] **Argument redesign — shared by 2.5, 2.7 and 2.9** (user, 2026-11-16): `start`, `window`, `theta`, `burn_in` etc. are repeated per function and per layer → chances for error. Design one way of passing settings that covers all three kinds of algorithm before changing any of them:
+  - benchmarks: `start`, `window`, `theta`;
+  - Bayesian (2.7): `burn_in`, `start`, plus `theta` and `max_models` it doesn't get today (→ fixes P3);
+  - possibilistic (2.9): `burn_in`, `start`, merge settings (`max_models`, `merge_threshold`, `nu_bandwidth`, `k_neighbours`) and the necessity settings (`gamma`, `eta`, `device`) — **necessity must keep working** until finish-line item 3 decides on it.
+  The pipeline (P1 / P2) is built on the same design afterwards. Snapshot bit for bit.
+- [ ] TOOLING_TODO bugs fixed in this step: Kan-Zhou saved mean scaled by h (**results change**: long-only weights + scoring); verify the Kan-Zhou incomplete-beta parameters against the paper.
 
 Edge-case notes:
 - [?] `minimum_variance_strategy` uses `np.linalg.inv` → singular window crashes (same as Markowitz).
@@ -207,20 +217,25 @@ Edge-case notes:
 - [?] Jorion / Kan-Zhou compute moments up to T-2; historical / rolling up to T-1 (last row has no use anyway).
 - [?] `_incomplete_beta_unregularized`: dead `if _betainc is not None` branch (TODO item), docstring typo "incomp2lete".
 
-### 2.6 `simulated_datasets.py` — [x] tests drafted 2026-11-13
+### 2.6 `simulated_datasets.py` — [x] done 2026-11-16 (tests drafted 2026-11-13)
 Tests (`tests/test_simulated_datasets.py`, 24 passing): every DGP — shapes, column names, integer index, finite values, seed reproducibility; iid means ≈ B·μ̄ and RF moments; loadings 0.5…1.5; sudden break flips mean sign; covariance break raises vol; regime parameters that make Var(g) negative are rejected; stochastic vol varies; **snapshot: all 6 DGPs regenerate the on-disk `*_T10000_N10_seed42.csv` + RF files bit for bit**.
 
+- [x] **Structure (2026-11-16, saved CSVs bit for bit):** one shared body `_simulate` (draw order RF → factor → noise); all six factor generators are private helpers without defaults (each default written once, in the public DGP); `DGPS` registry, `sim_paths` (the one place the file naming lives) and `generate_and_save_sim_datasets` in `simulated_datasets.py`; `table1`'s `SimConfig` replaced by `SIM_NAMES`. Tests: config defaults + keyword-only settings, registry, table1 round trip in a temp dir.
+
 Edge-case notes:
-- [?] `generate_and_save_sim_datasets` defaults `T=6000, n_assets=5` — stale (data in use is 10000 × 10). → `config.py`.
-- [?] Defaults differ between DGPs: `simulate_regime_shifts` seed=0 / n_assets=10, others seed=42 / n_assets=5.
-- [?] `simulate_regime_shifts` default `p_switch=0.5` → mean can switch every other day; check that's intended.
-- [?] `simulate_mean_reverting_factor` floors σ_g² at 1e-8 silently if the mean's variance exceeds the target.
-- [?] Leftover comment above `_simulate_factor_regime_mean`: "this is weird - better use the ou reversion process."
+- [x] (2026-11-16) `generate_and_save_sim_datasets` defaults `T=6000, n_assets=5` — stale (data in use is 10000 × 10). → `config.py`. Done: `config.SIM_DATA_DIR / SIM_T / SIM_N_ASSETS / SIM_SEED`; the function moved to `simulated_datasets.py`; `table1` and `pipeline_wrapper.main_simulated` read config too (main_simulated's file list waits for 2.10).
+- [x] (2026-11-16) Defaults differ between DGPs: `simulate_regime_shifts` seed=0 / n_assets=10, others seed=42 / n_assets=5. Done: every DGP is `(T=SIM_T, n_assets=SIM_N_ASSETS, seed=SIM_SEED, *, settings)`; `theta` → `theta_mu` (mean-reverting), `v_bar` → `sigma_bar` (stoch vol); tested.
+- [x] (closed 2026-11-16, no change) `simulate_regime_shifts` default `p_switch=0.5` → mean can switch every other day; check that's intended. Intended: Anderson & Cheng (2016) Appendix A, DGP 2 uses a 50% daily switch probability, ρ = 0.95, σ_μ = 0.001 — the code matches. (Mean persistence (1−p)+pρ = 0.975/day, half-life ≈ 27 days.)
+- [x] (2026-11-16) `simulate_mean_reverting_factor` floors σ_g² at 1e-8 silently if the mean's variance exceeds the target. → Now raises ValueError (guard against incompatible theta_mu / sigma_mu / sigma_bar), like the regime DGP; floor removed. Saved data bit for bit (never reached); test added.
+- [x] (closed 2026-11-16, kept as is) Leftover comment above `_simulate_factor_regime_mean`: "this is weird - better use the ou reversion process." It was a wish for an OU mean; the helper is A&C DGP 2 as published, and the OU version exists as `simulate_mean_reverting_factor`. Simulated-data settings will be revisited for the paper → TOOLING_TODO "After the paper".
 
 ### 2.7 `bayesian_averaging.py` — [x] tests drafted 2026-11-13
 Tests (`tests/test_bayesian_averaging.py`, 15 passing): **marginal likelihood == NIW predictive Student-t (`scipy.stats.multivariate_t`)**, invalid scale → −inf, NIW conjugate update, in-place update of all models, newborn model uses the common prior, sharing prior (2-model case, sums to 1, α=0 means no sharing, first model), probability update == Bayes' rule and stable with extreme likelihoods, BMA moments == mixture mean/covariance, pruning (threshold, renormalise, cap keeps the most probable + newest), `run_core` shapes / NaN layout / weights == Markowitz, Σ̂ symmetric PD, **no look-ahead** (changing returns after t leaves predictions up to t unchanged).
 Correction: `sharing_prior_update` IS used (called every step in `run_core`); earlier "unused helper" remark was wrong.
 Existing TODO: P3 (θ, `max_models` not passed). P4 (`t-1`/`t-2` denominators in `_new_model_prior`) fixed 2026-11-16 (`2c8a4e8`).
+
+- [ ] Arguments via the shared design from 2.5 → `theta` and `max_models` passed in (fixes P3).
+- [ ] TOOLING_TODO bug fixed in this step (with 2.9): `keep_newest` pruning evicts the wrong model (xfail test; **results change**).
 
 - [ ] **Duplication (with 2.9):** `_new_model_prior`, `_update_niw`, `_update_all_models` are exact copies in `bayesian_averaging.py` and `possibilistic_bayesian.py` (tested identical / same results). Keep one copy and import it in the other. Decided 2026-11-16: a small shared module (e.g. `niw.py`) that both import — possibilistic is the core of the project, so neither method should depend on the other. The burn-in setup of `sum_R` / `sum_R2` in both `run_core`s is duplicated too. Values must stay bit for bit.
 
@@ -237,6 +252,9 @@ Necessity is being removed from the project. No unit tests for this file.
 Tests (`tests/test_possibilistic_bayesian.py`, 21 passing + 3 xfail = logged bugs): newborn prior = pooled sample mean / variance, newborn possibility 1 with κ=ν=1, log score == docstring formula, possibility update == sup-normalised Bayes (max 1), all-invalid → ones, NIW update identical to Bayesian, pruning (under cap, top-k by possibility, length check), merge of two models (statistics, ν floor), Hellinger (0 for identical, symmetric, 1-D closed form), merge core (close pair merged, far kept, ν bandwidth), aggregation (single model = its mode, scale-invariant weights, κ-weighted mean), `run_core` with necessity = 1 (all three outputs identical, NaN layout, diagnostics, pool ≤ max_models, weights == Markowitz, Σ̂ SPD, **no look-ahead**).
 `tests/test_snapshots.py` also covers `run_core` end to end against the FYP code.
 Bugs (TOOLING_TODO, xfail tests): ~~weights start at row 500 not 1000~~ fixed 2026-11-16; `keep_newest` pruning evicts the wrong model (also Bayesian); Mahalanobis merge distance √2 off (only `results_cpu` used it).
+
+- [ ] Arguments via the shared design from 2.5; necessity settings (`gamma`, `eta`, `device`) kept and working until the necessity decision (finish-line item 3).
+- [ ] TOOLING_TODO bugs fixed in this step: `keep_newest` pruning (with 2.7, **results change**); silent `except Exception: pass` in `run_core` + `burn_obs = min(burn_in, T // 2)` silently shortening the burn-in; Mahalanobis merge distance √2 off (unused by current runs).
 
 Edge-case notes:
 - [ ] **Duplication (with 2.7):** `_new_model_prior`, `_update_niw`, `_update_all_models` are exact copies of the Bayesian ones → one shared module (see 2.7).

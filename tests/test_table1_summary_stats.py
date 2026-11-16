@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import simulated_datasets as sd
 import table1_summary_stats as t1
 from data_input import TABLE_TITLES
 
@@ -69,22 +70,28 @@ def test_build_panel_one_row_per_config(config):
     assert panel["T"].iloc[0] == 3
 
 
-def test_sim_datasets_round_trip(monkeypatch, tmp_path):
-    monkeypatch.setattr(t1, "SIM_DATA_DIR", tmp_path)
-    cfg = t1.SIM_CONFIGS[0]
-    t1.generate_and_save_sim_datasets([cfg], T=50, n_assets=3, seed=1)
-    df = t1.load_sim_pct(cfg, T=50, n_assets=3, seed=1)
-    ports, _ = cfg.sim_func(T=50, n_assets=3, seed=1)
+def test_sim_datasets_round_trip(tmp_path):
+    sd.generate_and_save_sim_datasets(
+        ["iid"], T=50, n_assets=3, seed=1, data_dir=tmp_path
+    )
+    df = t1.load_sim_pct("iid", T=50, n_assets=3, seed=1, data_dir=tmp_path)
+    ports, _ = sd.simulate_iid(T=50, n_assets=3, seed=1)
     assert np.allclose(df.values, ports.values * 100)  # percent units
-    assert (tmp_path / f"rf_{cfg.label}_T50_N3_seed1.csv").exists()
-    panel = t1.build_sim_panel([cfg], T=50, n_assets=3, seed=1)
+    assert (tmp_path / "rf_iid_T50_N3_seed1.csv").exists()
+    panel = t1.build_sim_panel(
+        ["iid"], T=50, n_assets=3, seed=1, data_dir=tmp_path
+    )
     assert panel["N"].iloc[0] == 3 and panel["T"].iloc[0] == 50
+    assert panel["Name"].iloc[0] == "IID"
 
 
-def test_load_sim_pct_missing_file_raises(monkeypatch, tmp_path):
-    monkeypatch.setattr(t1, "SIM_DATA_DIR", tmp_path)
+def test_sim_names_cover_every_dgp():
+    assert list(t1.SIM_NAMES) == list(sd.DGPS)
+
+
+def test_load_sim_pct_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
-        t1.load_sim_pct(t1.SIM_CONFIGS[0], T=50, n_assets=3, seed=1)
+        t1.load_sim_pct("iid", T=50, n_assets=3, seed=1, data_dir=tmp_path)
 
 
 def test_portfolio_configs_point_at_existing_files():

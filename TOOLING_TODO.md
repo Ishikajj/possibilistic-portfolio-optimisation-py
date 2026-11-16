@@ -57,3 +57,12 @@
 - [ ] `src/necessity_alternative_methods/annealing.py:326` — invalid `seed` argument.
 - [ ] `.gitignore` hides `.vscode/`. (`comparison_cpu_gpu.py`, `compute_longonly_weights.py` deleted, lines removed.)
 - [ ] `CLAUDE.md` out of date (lists removed files).
+
+## After the paper — research design (not refactor)
+
+- [ ] **Simulated datasets: settings for the extension** (discussed 2026-11-16, step 2.6). Will be revisited and regenerated with new settings later; not changed now (no bug, and changing settings means changing tests).
+  - A&C (2016) Appendix A, DGP 1 (iid) and DGP 2 (regime) are matched exactly by `simulate_iid` / `simulate_regime_shifts` (RF, factor, B, Σ, p_switch = 0.5, ρ = 0.95, σ_μ = 0.001, σ_g). Differences in the experiment: A&C use **41 datasets per DGP** (Monte Carlo) of **12,000 days**; we use 1 dataset (seed 42) of 10,000 days → one sample path mixes real differences with luck; use several seeds for the paper.
+  - A&C's "regime" DGP is effectively a persistent AR(1) mean with jumpy innovations (persistence 0.975/day, half-life ≈ 27 days, moving mean ≈ 10% of factor variance), not discrete Markov regimes — same family as our OU `mean_reverting` DGP.
+  - Our OU `mean_reverting` (half-life ≈ 13.5 days, moving mean ≈ 40% of factor variance) and `stochastic_volatility` (vol half-life ≈ 14 days) are far more extreme than the literature (predictive R² ~1–2% monthly, half-lives of months–years; daily vol persistence ≈ 0.98–0.99). Either present them as stress tests or recalibrate towards literature values.
+  - `cov_break` average vol ≈ 19% and `stochastic_volatility` average vol ≈ 17.7% (σ̄² is the median of v, not the mean) are not matched to the iid 16%, unlike regime / mean-reverting. Decide whether DGPs should share the unconditional variance.
+  - The comment above `_simulate_factor_regime_mean` ("this is weird - better use the ou reversion process") was a wish for an OU mean; it is kept as is (the OU version exists as `simulate_mean_reverting_factor`; the regime helper is A&C's DGP 2 as published).
