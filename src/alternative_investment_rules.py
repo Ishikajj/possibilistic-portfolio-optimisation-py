@@ -13,9 +13,12 @@ Predictive moments + weights (tuple[mu_sigma_dict, pd.DataFrame]):
   jorion_bayes_stein_strategy     — Jorion (1986) shrinkage toward min-variance mean
   kan_zhou_three_fund_strategy    — Kan & Zhou (2007) three-fund rule with incomplete-beta shrinkage
 
-All functions accept burn_in and periods_until_investment; weights are NaN before
-burn_in + periods_until_investment and on the last row (weights at t apply to returns at t+1).
-mu_sigma_dict keys: "mu_hat" (T, n), "sigma_hat" (T, n, n), aligned to returns_df.index.
+All functions take `start`, the first row with weights (the pipeline computes
+burn_in + periods_until_investment once). Weights are NaN before start and on the
+last row (weights at t apply to returns at t+1; timing convention: predictive.py).
+Known deviation: estimates at t currently use returns up to t-1 (iloc[t-w:t]),
+not up to t like the averaging methods (TOOLING_TODO; xfail in test_timing.py).
+mu_sigma_dict: predictive.make_predictive dict ("mu_hat", "sigma_hat", "index" = returns_df.index).
 """
 
 import numpy as np
@@ -26,6 +29,7 @@ from scipy.special import (
 )  # regularized incomplete beta I_x(a,b)
 
 from markowitz import markowitz_unconstrained
+from predictive import make_predictive
 
 
 def _incomplete_beta_unregularized(a: float, b: float, x: float) -> float:
@@ -73,22 +77,24 @@ def _minvar_mean_target(
 
 def historical_expectations_weights(
     returns_df: pd.DataFrame,
-    burn_in: int,
-    periods_until_investment: int,
+    start: int,
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
-    """Compute historical means and covariances across time."""
+    """Compute historical means and covariances across time.
+
+    Currently a rolling window of length `start`, not expanding (TOOLING_TODO).
+    """
     T, n = returns_df.shape
     mu_hat = np.full((T, n), np.nan)
     sigma_hat = np.full((T, n, n), np.nan)
 
-    for t in range(burn_in + periods_until_investment, T):
-        ret_window = returns_df.iloc[t - burn_in - periods_until_investment : t]
+    for t in range(start, T):
+        ret_window = returns_df.iloc[t - start : t]
         mu_hat[t] = ret_window.mean().values
         sigma_hat[t] = ret_window.cov().values  # auto set c = w-1
 
-    mu_sigma_dict = {"mu_hat": mu_hat, "sigma_hat": sigma_hat}
+    mu_sigma_dict = make_predictive(mu_hat, sigma_hat, returns_df.index)
     investment_weights = markowitz_unconstrained(
-        mu_sigma_dict, returns_df, burn_in, periods_until_investment
+        mu_sigma_dict, returns_df, start
     )
 
     return mu_sigma_dict, investment_weights
@@ -98,24 +104,21 @@ def historical_expectations_weights(
 def rolling_window_weights(
     returns_df: pd.DataFrame,
     window: int,
-    burn_in: int,
-    periods_until_investment: int,
+    start: int,
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
 
     T, n = returns_df.shape
     mu_hat = np.full((T, n), np.nan)
     sigma_hat = np.full((T, n, n), np.nan)
 
-    start = max(window, burn_in + periods_until_investment)
-
-    for t in range(start, T):
+    for t in range(max(window, start), T):
         ret_window = returns_df.iloc[t - window : t]
         mu_hat[t] = ret_window.mean().values
         sigma_hat[t] = ret_window.cov().values
 
-    mu_sigma_dict = {"mu_hat": mu_hat, "sigma_hat": sigma_hat}
+    mu_sigma_dict = make_predictive(mu_hat, sigma_hat, returns_df.index)
     investment_weights = markowitz_unconstrained(
-        mu_sigma_dict, returns_df, burn_in, periods_until_investment
+        mu_sigma_dict, returns_df, start
     )
 
     return mu_sigma_dict, investment_weights
@@ -123,15 +126,12 @@ def rolling_window_weights(
 
 def equal_weight_strategy(
     returns_df: pd.DataFrame,
-    burn_in: int = 0,
-    periods_until_investment: int = 0,
+    start: int = 0,
 ) -> pd.DataFrame:
-    """Create 1/N weights with burn-in and last-row exclusion."""
+    """Create 1/N weights from `start`, last row excluded."""
     T, n = returns_df.shape
 
     weights = np.full((T, n), np.nan)
-
-    start = burn_in + periods_until_investment
     end = T - 1  # last row excluded
 
     if start < end:
@@ -146,11 +146,10 @@ def equal_weight_strategy(
 
 def market_weight_strategy(
     returns_df: pd.DataFrame,
-    burn_in: int = 0,
-    periods_until_investment: int = 0,
+    start: int = 0,
     market_col: str = "Mkt-RF",
 ) -> pd.DataFrame:
-    """Create market weights with burn-in and last-row exclusion."""
+    """Create market weights from `start`, last row excluded."""
     T, n = returns_df.shape
 
     weights = np.full((T, n), np.nan)
@@ -159,7 +158,6 @@ def market_weight_strategy(
             f"Market column '{market_col}' not found in returns DataFrame."
         )
 
-    start = burn_in + periods_until_investment
     end = T - 1  # last row excluded
     market_idx = returns_df.columns.get_loc(market_col)
 
@@ -176,19 +174,16 @@ def market_weight_strategy(
 
 def minimum_variance_strategy(
     returns_df: pd.DataFrame,
-    burn_in: int = 0,
-    periods_until_investment: int = 0,
+    start: int = 0,
     window: int = 250,
 ) -> pd.DataFrame:
-    """Create minimum variance weights with burn-in and last-row exclusion."""
+    """Create minimum variance weights from `start` (or `window`, if later)."""
     T, n = returns_df.shape
 
     weights = np.full((T, n), np.nan)
-
-    start = max(window, burn_in + periods_until_investment)
     end = T - 1  # last row excluded
 
-    for t in range(start, end):
+    for t in range(max(window, start), end):
         ret_window = returns_df.iloc[t - window : t]
         sigma_hat_t = ret_window.cov().values
         inv_sigma = np.linalg.inv(sigma_hat_t)
@@ -206,8 +201,7 @@ def minimum_variance_strategy(
 def jorion_bayes_stein_estimates(
     returns_df: pd.DataFrame,
     window: int = 250,
-    burn_in: int = 0,
-    periods_until_investment: int = 0,
+    start: int = 0,
 ) -> dict[str, np.ndarray]:
     """Compute Jorion (1986) Bayes–Stein shrunk mean/covariance.
 
@@ -229,7 +223,7 @@ def jorion_bayes_stein_estimates(
             f"window must be > n+2 for c=w-n-2 to be positive; got window={w}, n={n}"
         )
 
-    start = max(w, burn_in + periods_until_investment)
+    start = max(w, start)
     end = T - 1  # last row excluded (since returns_{t+1} is needed downstream)
 
     mu_star = np.full((T, n), np.nan)
@@ -288,26 +282,25 @@ def jorion_bayes_stein_estimates(
 def jorion_bayes_stein_strategy(
     returns_df: pd.DataFrame,
     window: int = 250,
-    burn_in: int = 0,
-    periods_until_investment: int = 0,
+    start: int = 0,
     theta: float = 1.0,
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
     """Create Jorion's Bayes-Stein weights with burn-in and last-row exclusion."""
     est = jorion_bayes_stein_estimates(
         returns_df=returns_df,
         window=window,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
     )
 
-    mu_sigma_dict = {"mu_hat": est["mu_star"], "sigma_hat": est["sigma_star"]}
+    mu_sigma_dict = make_predictive(
+        est["mu_star"], est["sigma_star"], returns_df.index
+    )
 
     # Use existing pipeline to turn (mu*, Sigma*) into weights
     return mu_sigma_dict, markowitz_unconstrained(
         mu_sigma_dict=mu_sigma_dict,
         returns_df=returns_df,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
         theta=theta,
     )
 
@@ -315,8 +308,7 @@ def jorion_bayes_stein_strategy(
 def kan_zhou_three_fund_estimates(
     returns_df: pd.DataFrame,
     window: int = 250,
-    burn_in: int = 0,
-    periods_until_investment: int = 0,
+    start: int = 0,
 ) -> dict[str, np.ndarray]:
     """Compute Kan and Zhou (2007) three-fund shrinkage estimates.
 
@@ -339,7 +331,7 @@ def kan_zhou_three_fund_estimates(
             f"window must be > n+4 for h to be well-defined; got window={w}, n={n}"
         )
 
-    start = max(w, burn_in + periods_until_investment)
+    start = max(w, start)
     end = T - 1
 
     h = ((w - n - 1.0) * (w - n - 4.0)) / (w * (w - 2.0))
@@ -403,8 +395,7 @@ def kan_zhou_three_fund_estimates(
 def kan_zhou_three_fund_strategy(
     returns_df: pd.DataFrame,
     window: int = 250,
-    burn_in: int = 0,
-    periods_until_investment: int = 0,
+    start: int = 0,
     theta: float = 1.0,
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
     """Kan and Zhou (2007) three-fund rule.
@@ -424,8 +415,7 @@ def kan_zhou_three_fund_strategy(
     est = kan_zhou_three_fund_estimates(
         returns_df=returns_df,
         window=window,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
     )
 
     h = float(est["h"][0])
@@ -435,12 +425,11 @@ def kan_zhou_three_fund_strategy(
     mu_tilde = h * est["mu_star"]
     sigma_hat = est["Sigma"]
 
-    mu_sigma_dict = {"mu_hat": mu_tilde, "sigma_hat": sigma_hat}
+    mu_sigma_dict = make_predictive(mu_tilde, sigma_hat, returns_df.index)
 
     return mu_sigma_dict, markowitz_unconstrained(
         mu_sigma_dict=mu_sigma_dict,
         returns_df=returns_df,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
         theta=theta,
     )

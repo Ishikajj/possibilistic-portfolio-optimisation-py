@@ -239,10 +239,13 @@ def test_date_window_is_inclusive(french_path, ff_path):
     assert dates(None, None) == [2, 3, 4]
 
 
-def test_prepare_returns_drops_date_and_rf_only(french_path, ff_path):
-    out = di.prepare_returns(di.load_excess_returns(french_path, ff_path))
+def test_prepare_returns_indexes_by_date_and_drops_rf(french_path, ff_path):
+    excess = di.load_excess_returns(french_path, ff_path)
+    out = di.prepare_returns(excess)
     assert list(out.columns) == ["Alpha", "Beta", "Mkt-RF"]  # market kept
     assert all(np.issubdtype(t, np.number) for t in out.dtypes)
+    assert out.index.name == "Date"
+    assert out.index.equals(pd.DatetimeIndex(excess["Date"], name="Date"))
 
 
 # --- real data (skipped if ../datasets is missing) ------------------------

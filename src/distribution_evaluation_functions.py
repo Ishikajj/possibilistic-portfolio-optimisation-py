@@ -1,7 +1,8 @@
 """Period-by-period predictive distribution scoring under a multivariate Gaussian.
 
-Inputs: returns_df (T, n) and mu_sigma_dict {"mu_hat": (T,n), "sigma_hat": (T,n,n)},
-in the same time and asset order. Moments at t score the realised returns at t+1.
+Inputs: returns_df (T, n) and a forecast dict (predictive.py: "mu_hat" (T,n),
+"sigma_hat" (T,n,n), "index" checked against returns_df.index), same asset order.
+Moments at t score the realised returns at t+1.
 
 mahalanobis_distance_series        — sqrt((x-mu)' Sigma^{-1} (x-mu)) per period
                                      (squared=True drops the sqrt), lower is better.
@@ -19,6 +20,8 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from predictive import check_aligned
+
 
 def _gaussian_terms(
     returns_df: pd.DataFrame,
@@ -31,6 +34,7 @@ def _gaussian_terms(
     or Sigma can't be used: singular / not positive definite, no
     regularisation (one RuntimeWarning with the count).
     """
+    check_aligned(mu_sigma_dict, returns_df.index)
     mu_hat = mu_sigma_dict["mu_hat"]
     sigma_hat = mu_sigma_dict["sigma_hat"]
     T, n = returns_df.shape

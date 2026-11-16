@@ -13,15 +13,17 @@ Long-only — SLSQP constrained optimisation, no short selling:
   markowitz_long_only       — entry point: mu_sigma_dict + returns_df → weights DataFrame
 
 Both entry points take:
-  mu_sigma_dict : {"mu_hat": ndarray (T, n), "sigma_hat": ndarray (T, n, n)}
+  mu_sigma_dict : forecast dict (predictive.py): "mu_hat" (T, n), "sigma_hat" (T, n, n),
+                  "index" (checked against returns_df.index if present)
   returns_df    : pd.DataFrame (T, n) — used only for index/columns alignment
-  burn_in, periods_until_investment : first valid weight at burn_in + periods_until_investment
+  start         : first row with weights (the pipeline computes burn_in + periods_until_investment once)
   theta         : risk-aversion scalar (default 1.0)
 
 Unconstrained weights don't sum to 1 by design: the remainder (1 - sum(w))
 sits in the risk-free asset. Long-only weights sum to 1 (fully invested).
 
-Weights at index t are intended to be applied to returns at t+1 (lag handled upstream).
+Weights at row t come from the moments at row t and are held over t+1 (the
+shift happens in portfolio_returns; timing convention: predictive.py).
 Last row is always NaN — predictions at T-1 have no subsequent return to invest in.
 """
 
@@ -32,6 +34,8 @@ import warnings
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
+
+from predictive import check_aligned
 
 
 def markowitz_step(
@@ -84,14 +88,13 @@ def markowitz_step_long_only(
 def compute_weights_array(
     mu_hat: np.ndarray,
     sigma_hat: np.ndarray,
-    burn_in: int,
-    periods_until_investment: int,
+    start: int,
     theta: float,
     long_only: bool = False,
 ) -> np.ndarray:
     """Compute weights array across time.
 
-    Rows from burn_in + periods_until_investment to T-2 are filled; the last
+    Rows from start to T-2 are filled; the last
     row has no following return to invest in. Rows with NaN mu are skipped.
     Long-only warm-starts each step from the previous successful solution.
 
@@ -104,7 +107,6 @@ def compute_weights_array(
     T, n = mu_hat.shape
     weights = np.full((T, n), np.nan)
     w_prev = np.ones(n) / n  # long-only starting point
-    start = burn_in + periods_until_investment
     skipped = {"singular Sigma": 0, "optimiser failed": 0}
 
     for t in range(start, T - 1):
@@ -139,18 +141,17 @@ def compute_weights_array(
 def markowitz_long_only(
     mu_sigma_dict: dict[str, np.ndarray],
     returns_df: pd.DataFrame,
-    burn_in: int,
-    periods_until_investment: int,
+    start: int,
     theta: float = 1.0,
 ) -> pd.DataFrame:
     """Full pipeline: extract → long-only optimise → return DataFrame."""
+    check_aligned(mu_sigma_dict, returns_df.index)
     mu_hat, sigma_hat = mu_sigma_dict["mu_hat"], mu_sigma_dict["sigma_hat"]
 
     weights_array = compute_weights_array(
         mu_hat=mu_hat,
         sigma_hat=sigma_hat,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
         theta=theta,
         long_only=True,
     )
@@ -163,18 +164,17 @@ def markowitz_long_only(
 def markowitz_unconstrained(
     mu_sigma_dict: dict[str, np.ndarray],
     returns_df: pd.DataFrame,
-    burn_in: int,
-    periods_until_investment: int,
+    start: int,
     theta: float = 1.0,
 ) -> pd.DataFrame:
     """Full pipeline: extract → compute → return DataFrame."""
+    check_aligned(mu_sigma_dict, returns_df.index)
     mu_hat, sigma_hat = mu_sigma_dict["mu_hat"], mu_sigma_dict["sigma_hat"]
 
     weights_array = compute_weights_array(
         mu_hat=mu_hat,
         sigma_hat=sigma_hat,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
         theta=theta,
     )
 

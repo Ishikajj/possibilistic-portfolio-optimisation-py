@@ -40,7 +40,7 @@ def returns() -> pd.DataFrame:
     return pd.DataFrame(rng.normal(0.0005, 0.01, (150, N)), columns=list("abc"))
 
 
-RUN = dict(burn_in=40, periods_until_investment=20, max_models=15, n_jobs=1)
+RUN = dict(burn_in=40, start=60, max_models=15, n_jobs=1)
 
 
 # --- newborn model ---------------------------------------------------------
@@ -329,10 +329,8 @@ def test_run_core_uses_returns_up_to_t_only(no_necessity, returns):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="TOOLING_TODO bug: possibilistic weights start at burn_in, not burn_in + periods_until_investment",
+    reason="TOOLING_TODO bug: possibilistic weights start at burn_in, not at start",
 )
-def test_run_core_weights_start_after_periods_until_investment(
-    no_necessity, returns
-):
+def test_run_core_weights_start_at_start(no_necessity, returns):
     *_, w_e = pb.run_core(returns, **RUN)
     assert w_e.iloc[:60].isna().all().all()

@@ -36,6 +36,7 @@ from faster_necessity import (
     power_weighting,
 )
 from markowitz import markowitz_unconstrained
+from predictive import make_predictive
 
 
 def _new_model_prior(
@@ -613,7 +614,7 @@ def _aggregate_possibilistic_niw(
 def run_core(
     returns_df: pd.DataFrame,
     burn_in: int = 1000,
-    periods_until_investment: int = 0,
+    start: int | None = None,
     merge_threshold: float = 0.15,
     max_models: int = 100,
     keep_newest: bool = True,
@@ -637,7 +638,8 @@ def run_core(
     Args:
         returns_df: (T, n) DataFrame of excess returns in decimals, numeric columns only.
         burn_in: periods used to initialise sum_R / sum_R2 before model birth begins.
-        periods_until_investment: additional lag before Markowitz weights are non-NaN.
+        start: first row with weights (None = burn_in). Currently ignored:
+            weights start at burn_in (bug, TOOLING_TODO, fixed in 2.9).
         merge_threshold: Hellinger distance below which two models are merged.
         max_models: maximum pool size after pruning each step.
         keep_newest: if True, always retain the newborn model after pruning.
@@ -788,30 +790,26 @@ def run_core(
 
     diag_df = pd.DataFrame(records).set_index("t")
 
-    masked_predictive = {
-        "mu_hat": mu_hat_arr_masked,
-        "sigma_hat": sigma_hat_arr_masked,
-    }
-    power_predictive = {
-        "mu_hat": mu_hat_arr_power,
-        "sigma_hat": sigma_hat_arr_power,
-    }
-    exp_predictive = {"mu_hat": mu_hat_arr_exp, "sigma_hat": sigma_hat_arr_exp}
+    index = returns_df.index
+    masked_predictive = make_predictive(
+        mu_hat_arr_masked, sigma_hat_arr_masked, index
+    )
+    power_predictive = make_predictive(
+        mu_hat_arr_power, sigma_hat_arr_power, index
+    )
+    exp_predictive = make_predictive(mu_hat_arr_exp, sigma_hat_arr_exp, index)
 
+    # BUG (TOOLING_TODO, fix in 2.9): should be `start`, like every other
+    # strategy; weights start at burn_in (kept for now: snapshot bit for bit).
+    weights_start = burn_in
     weights_masked = markowitz_unconstrained(
-        masked_predictive,
-        returns_df,
-        burn_in=burn_in,
-        periods_until_investment=0,
+        masked_predictive, returns_df, start=weights_start
     )
     weights_power = markowitz_unconstrained(
-        power_predictive,
-        returns_df,
-        burn_in=burn_in,
-        periods_until_investment=0,
+        power_predictive, returns_df, start=weights_start
     )
     weights_exp = markowitz_unconstrained(
-        exp_predictive, returns_df, burn_in=burn_in, periods_until_investment=0
+        exp_predictive, returns_df, start=weights_start
     )
 
     return (

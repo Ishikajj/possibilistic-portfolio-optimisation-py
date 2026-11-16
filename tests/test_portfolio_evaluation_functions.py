@@ -266,3 +266,25 @@ def test_compare_to_benchmark_one_row_per_strategy(returns, weights):
 def test_compare_to_benchmark_has_named_columns(returns, weights):
     out = compare_to_benchmark(returns, weights, {"x": _other_weights(weights)})
     assert list(out.columns) == list(SharpeTestResult._fields)
+
+
+# --- date index -------------------------------------------------------------
+
+
+def test_sharpe_difference_and_ce_match_by_date():
+    rng = np.random.default_rng(7)
+    dates = pd.bdate_range("2000-01-03", periods=300, name="Date")
+    a = pd.Series(rng.normal(0.001, 0.01, 300), index=dates)
+    b = pd.Series(rng.normal(0.0, 0.01, 300), index=dates)
+    # benchmark starts 50 days later: only the shared dates are compared
+    res = sharpe_difference_test(a, b.iloc[50:])
+    assert np.isclose(
+        res.sharpe_strategy, a.iloc[50:].mean() / a.iloc[50:].std()
+    )
+
+    returns = pd.DataFrame({"x": a, "y": b})
+    w = pd.DataFrame(0.5, index=dates, columns=["x", "y"])
+    rf = pd.Series(1e-4, index=dates)
+    certainty_equivalent(returns, w, rf)  # RF found for every return date
+    with pytest.raises(KeyError):  # a return date without RF fails loudly
+        certainty_equivalent(returns, w, rf.drop(dates[100]))

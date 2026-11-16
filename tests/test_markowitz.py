@@ -104,7 +104,7 @@ def test_long_only_array_matches_single_steps():
     # The array version warm-starts; it must still find the same optimum.
     T, n, first = 8, 3, 2
     pred = _predictives(T, n)
-    w = markowitz_long_only(pred, pd.DataFrame(np.zeros((T, n))), 1, 1, 2.0)
+    w = markowitz_long_only(pred, pd.DataFrame(np.zeros((T, n))), 2, 2.0)
     arr = w.to_numpy()
     steps = [
         markowitz_step_long_only(pred["mu_hat"][t], pred["sigma_hat"][t], 2.0)
@@ -122,7 +122,7 @@ ENTRY_POINTS = [markowitz_unconstrained, markowitz_long_only]
 def test_nan_before_investment_and_on_last_row(entry):
     T, n, burn_in, piu = 10, 3, 2, 3
     returns_df = pd.DataFrame(np.zeros((T, n)), columns=["a", "b", "c"])
-    w = entry(_predictives(T, n), returns_df, burn_in, piu)
+    w = entry(_predictives(T, n), returns_df, burn_in + piu)
 
     first = burn_in + piu
     assert w.shape == (T, n)
@@ -146,7 +146,7 @@ def test_nan_mu_row_stays_nan(entry):
     T, n = 8, 2
     pred = _predictives(T, n)
     pred["mu_hat"][4] = np.nan
-    w = entry(pred, pd.DataFrame(np.zeros((T, n))), 1, 1)
+    w = entry(pred, pd.DataFrame(np.zeros((T, n))), 2)
     assert w.iloc[4].isna().all()
     assert w.iloc[[3, 5]].notna().all().all()
 
@@ -155,14 +155,14 @@ def test_nan_mu_row_stays_nan(entry):
 def test_too_short_series_is_all_nan(entry):
     """First investable row is the last row -> empty loop, all NaN, no crash."""
     T, n = 3, 2  # first investable row (1 + 1 = 2) is the last row -> nothing
-    w = entry(_predictives(T, n), pd.DataFrame(np.zeros((T, n))), 1, 1)
+    w = entry(_predictives(T, n), pd.DataFrame(np.zeros((T, n))), 2)
     assert w.isna().all().all()
 
 
 def test_unconstrained_matches_step_on_every_row():
     T, n = 7, 3
     pred = _predictives(T, n)
-    w = markowitz_unconstrained(pred, pd.DataFrame(np.zeros((T, n))), 1, 1, 3.0)
+    w = markowitz_unconstrained(pred, pd.DataFrame(np.zeros((T, n))), 2, 3.0)
     for t in range(2, T - 1):
         expected = markowitz_step(pred["mu_hat"][t], pred["sigma_hat"][t], 3.0)
         assert np.allclose(w.iloc[t], expected)
@@ -176,7 +176,7 @@ def test_singular_sigma_row_is_nan_with_warning():
     pred = _predictives(T, n)
     pred["sigma_hat"][4] = np.zeros((n, n))  # inv() raises LinAlgError
     with pytest.warns(RuntimeWarning, match="singular Sigma: 1"):
-        w = markowitz_unconstrained(pred, pd.DataFrame(np.zeros((T, n))), 1, 1)
+        w = markowitz_unconstrained(pred, pd.DataFrame(np.zeros((T, n))), 2)
     assert w.iloc[4].isna().all()
     assert w.iloc[[3, 5]].notna().all().all()
 
@@ -186,7 +186,7 @@ def test_singular_sigma_row_is_nan_with_warning():
 def test_nonpositive_theta_raises(entry, theta):
     T, n = 6, 2
     with pytest.raises(ValueError, match="theta"):
-        entry(_predictives(T, n), pd.DataFrame(np.zeros((T, n))), 1, 1, theta)
+        entry(_predictives(T, n), pd.DataFrame(np.zeros((T, n))), 2, theta)
 
 
 def test_long_only_failure_is_nan_and_keeps_warm_start(monkeypatch):
@@ -206,7 +206,7 @@ def test_long_only_failure_is_nan_and_keeps_warm_start(monkeypatch):
 
     monkeypatch.setattr(markowitz, "markowitz_step_long_only", flaky_step)
     with pytest.warns(RuntimeWarning, match="optimiser failed: 1"):
-        w = markowitz_long_only(pred, pd.DataFrame(np.zeros((T, n))), 1, 1)
+        w = markowitz_long_only(pred, pd.DataFrame(np.zeros((T, n))), 2)
 
     assert w.iloc[3].isna().all()  # rows start at 2, so the 2nd call is row 3
     assert w.iloc[[2, 4]].notna().all().all()
@@ -218,5 +218,5 @@ def test_clean_run_gives_no_warning():
     df = pd.DataFrame(np.zeros((T, n)))
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # any warning fails the test
-        markowitz_unconstrained(_predictives(T, n), df, 1, 1)
-        markowitz_long_only(_predictives(T, n), df, 1, 1)
+        markowitz_unconstrained(_predictives(T, n), df, 2)
+        markowitz_long_only(_predictives(T, n), df, 2)

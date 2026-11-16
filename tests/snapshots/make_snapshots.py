@@ -106,8 +106,9 @@ def build(src: Path, bypass_necessity: bool = False) -> dict[str, np.ndarray]:
         prepared = data_input.prepare_returns(excess)
         _frame_to_arrays(f"data_input__{name}", prepared, out)
         loaded[name] = prepared
-    if new_api:
-        global_rf = data_input.load_risk_free(rf_path, START_DATE)["RF"]
+    if new_api:  # Date-indexed, like the returns (matched by date in CEQ)
+        rf_df = data_input.load_risk_free(rf_path, START_DATE)
+        global_rf = rf_df.set_index("Date")["RF"]
     else:
         rf_df = data_input.load_risk_free_rate(rf_path)
         global_rf = data_input.slice_timeframe(rf_df, START_DATE, None)[
@@ -118,7 +119,7 @@ def build(src: Path, bypass_necessity: bool = False) -> dict[str, np.ndarray]:
     # --- the two pipeline slices --------------------------------------------
     real = loaded["vw"].iloc[:T]
     real = real[list(real.columns[:N_ASSETS]) + ["Mkt-RF"]]
-    real_rf = global_rf.iloc[:T]
+    real_rf = global_rf.iloc[:T]  # same rows as `real` (both from START_DATE)
 
     sim_dir = DATASETS_DIR / "simulated"
     sim = pd.read_csv(sim_dir / "iid_T10000_N10_seed42.csv").iloc[:T, :N_ASSETS]
@@ -138,8 +139,13 @@ def build(src: Path, bypass_necessity: bool = False) -> dict[str, np.ndarray]:
             evaluation_pipeline.run_evaluation(folder, rf_series=rf, theta=1.0)
             for f in sorted(folder.iterdir()):
                 key = f"{name}__{f.stem}"
-                if f.suffix == ".npy":
+                if f.suffix == ".npy":  # FYP code: <algo>_mus / _sigmas.npy
                     out[key] = np.load(f)
+                elif f.suffix == ".npz":  # <algo>_predictive.npz, same keys
+                    algo = f.stem.removesuffix("_predictive")
+                    with np.load(f) as z:
+                        out[f"{name}__{algo}_mus"] = z["mu_hat"]
+                        out[f"{name}__{algo}_sigmas"] = z["sigma_hat"]
                 elif f.suffix == ".csv":
                     _frame_to_arrays(key, pd.read_csv(f, index_col=0), out)
             print(f"[{name}] done in {time.time() - t0:.1f}s")

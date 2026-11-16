@@ -99,6 +99,16 @@ Tests go in `tests/test_<module>.py`. Shared tiny fixtures in `tests/conftest.py
 - `possibilistic_bayesian.run_core`: `except Exception: pass` around aggregation → 2.9.
 - Already reporting: `markowitz` (singular Σ, optimiser failure). Bayesian: no silent NaN path found.
 
+### Date index (cross-cutting) — [x] done 2026-11-16, values unchanged (snapshot bit for bit)
+Done as its own step, before 2.11; the timing fix (benchmarks at t-1) stays separate.
+- `data_input.prepare_returns` keeps `Date` as the index (simulated data: row numbers).
+- Forecasts carry their index: new `src/predictive.py` — `make_predictive` (every algorithm builds its `mu_sigma_dict` with it → keys `mu_hat`, `sigma_hat`, `index`), `check_aligned` (used by both Markowitz entry points and `distribution_evaluation_functions`), `save_predictive` / `load_predictive` (`<algo>_predictive.npz` replaces `<algo>_mus.npy` / `_sigmas.npy`; old `.npy` still read, without index).
+- `pipeline_wrapper`: weights / `returns.csv` carry dates; real runs also save `rf.csv` (Date, RF).
+- `evaluation_pipeline`: reads dates back; refuses weights whose index differs from `returns.csv`; `load_rf(folder)` (dated `rf.csv` / Date-less simulated `rf.csv` / legacy global RF by row) replaces the `__main__` logic.
+- Tests: `tests/test_predictive.py` (6), dates reach every output, misaligned weights / forecasts raise, RF by date / row / legacy, Sharpe test + CE by date. Old FYP folders evaluate identically to the previous commit.
+- [~] Notebooks load `*_mus.npy` / `*_sigmas.npy` directly: left as is on purpose (2026-11-16) — they show the FYP results with saved outputs. New notebooks later will use `predictive.load_predictive` / `evaluation_pipeline.load_strategy_outputs`.
+- [ ] `possibilistic_diagnostics.csv` is still indexed by step `t`, not date (2.9).
+
 ### 2.1 `markowitz.py` — [x] done 2026-11-15 (not committed)
 Used by: `bayesian_averaging`, `possibilistic_bayesian`, `alternative_investment_rules` (unconstrained); `pipeline_wrapper` (long-only).
 
@@ -106,7 +116,7 @@ Tests (`tests/test_markowitz.py`, 23 passing): closed form Σ⁻¹μ/θ, 1/θ sc
 
 Decisions:
 - [x] **Duplication:** one loop `compute_weights_array(..., long_only=False)` for both variants; `markowitz_step_long_only` got a `w0` arg and is called by the loop; `compute_weights_array_long_only` deleted. No extra `markowitz_weights` entry point: `markowitz_unconstrained` / `markowitz_long_only` stay, callers unchanged. Old vs new weights bit-for-bit identical (both variants). B023 lint warning gone.
-- [~] **Duplication:** `burn_in + periods_until_investment` is re-added in every function → compute one `start` index once and pass that. Touches all benchmarks, both averaging methods and `pipeline_wrapper` → **do together with the TODO timing fix (benchmarks at t-1)**, not as part of Markowitz.
+- [x] **Duplication:** `burn_in + periods_until_investment` was re-added in every function → done 2026-11-16 as its own step (before the timing fix, values unchanged, snapshot bit for bit): `pipeline_wrapper` computes `start` once; Markowitz (`compute_weights_array`, both entry points) and all benchmarks take `start` (+ `window`); Bayesian / possibilistic `run_core(burn_in, start=None)` (`burn_in` = prior period, `start` defaults to it). Possibilistic still starts at `burn_in` (logged bug, explicit `weights_start = burn_in` + comment, fix in 2.9). Historical's window length is `start` until the expanding fix.
 - [x] Singular Σ → was `LinAlgError` killing the run. Now NaN row + one `RuntimeWarning` with counts per reason (unconstrained only; SLSQP doesn't invert Σ). `inv` kept.
 - [x] NaN in Σ but not μ → **not possible, no handling.** Every producer fills μ and Σ together (possibilistic assigns them in pairs after the `try`); 0 of 2,448,648 valid-μ rows in `results_fyp_submitted` have NaN in Σ.
 - [x] θ ≤ 0 → now `ValueError` up front (was `ZeroDivisionError` / silent all-in).
@@ -148,7 +158,7 @@ Edge-case notes:
 - [x] CE adds mean RF to excess returns (`include_rf_in_mean=True`) — **intended**: matches Anderson & Cheng (2016) eq. (28), `mean(R_p) + mean(R_f) − θ/2·Var(R_p)`, sample variance, R_f on return dates t+1. Docstring now states the formula + reference (2026-11-15). Open part: RF matched by row number, not date → fixed by keeping `Date` as the index (proposed 2026-11-15, with the TODO timing fix; not scheduled yet).
 - [x] Sharpe test with identical series → `t = nan` + RuntimeWarning (TODO item). → Now t = 0, p = 1, no warning (2026-11-15). Test added.
 - [x] Docstring typo "inno dexed" in `portfolio_returns` — fixed 2026-11-15.
-- [ ] **Date index change touches this file** (when `Date` is kept as the index, with the TODO timing fix): `lag` is already gone (fixed 1-day shift); `portfolio_returns` output becomes indexed by return date; `certainty_equivalent` then matches RF by date (`rf_series.loc[port.index]` fails loudly on missing days instead of picking the wrong row); `sharpe_difference_test` aligns on the common index labels (`index.intersection`) → row numbers today, dates then; no code change needed, add a test that it aligns by date. Tests here build integer-indexed frames → update fixtures (date index).
+- [x] (done 2026-11-16, see "Date index" under Part 2) **Date index change touches this file** (when `Date` is kept as the index, with the TODO timing fix): `lag` is already gone (fixed 1-day shift); `portfolio_returns` output becomes indexed by return date; `certainty_equivalent` then matches RF by date (`rf_series.loc[port.index]` fails loudly on missing days instead of picking the wrong row); `sharpe_difference_test` aligns on the common index labels (`index.intersection`) → row numbers today, dates then; no code change needed, add a test that it aligns by date. Tests here build integer-indexed frames → update fixtures (date index).
 - [x] (2026-11-15) Input checks: `assert`s → `ValueError` with a message for value checks (`lag ≥ 0`, `window > 0`, `1 ≤ min_periods ≤ window`, `θ ≥ 0`, RF one column); `isinstance` asserts dropped (type hints + Pylance). One `assert` kept for type narrowing. Parametrised test added.
 
 ### 2.4 `distribution_evaluation_functions.py` — [x] done 2026-11-16 (tests drafted 2026-11-13)
@@ -162,7 +172,7 @@ Structure cleanup (2026-11-16, 174 → 114 lines, snapshot bit for bit):
 - Kept: `squared` option.
 - [x] `average_log_likelihood` removed (2026-11-16): the pipeline averages the log-lik series with `.dropna().mean()`, the same way it already did Mahalanobis.
 - [x] `_gaussian_terms` shortened: NaN check, symmetrising and `slogdet` on all rows at once; `solve` stays per row (a batched solve differs in the last bit on 11-asset data). "linear algebra error" reason gone (`slogdet` and `solve` share the LU, so `sign > 0` can't fail in `solve`). Bit for bit.
-- [ ] **Date index change touches this file** (with the 2.3 date item): the 1-day shift stays (forecast at t−1 scores the return at t) and so does `rows = flatnonzero(ok)[good] + 1` (positions in the shifted arrays → return rows). Output Series take `returns_df.index`, so they become date-indexed for free. `mu_hat` / `sigma_hat` (`.npy`) have no index and are matched to returns **by position**, guarded only by the shape check → when dates go in, save / check the forecast dates too (test: forecast row t belongs to return date t).
+- [x] (done 2026-11-16, forecasts now carry `index` and are checked) **Date index change touches this file** (with the 2.3 date item): the 1-day shift stays (forecast at t−1 scores the return at t) and so does `rows = flatnonzero(ok)[good] + 1` (positions in the shifted arrays → return rows). Output Series take `returns_df.index`, so they become date-indexed for free. `mu_hat` / `sigma_hat` (`.npy`) have no index and are matched to returns **by position**, guarded only by the shape check → when dates go in, save / check the forecast dates too (test: forecast row t belongs to return date t).
 - [~] → 2.11: scoring still runs 4× per strategy (avg log-lik, avg Mahalanobis, then both series again) → compute each series once, average for `scalars.csv`.
 
 Edge-case notes:
@@ -232,7 +242,7 @@ Edge-case notes:
 
 ### 2.11 `evaluation_pipeline.py` — [x] tests drafted 2026-11-13
 Tests (`tests/test_evaluation_pipeline.py`, 8 passing; fake run folder): strategy discovery (incl. `*_longonly`), loading weights ± predictives, missing files raise, scalar metrics == the metric functions (Sharpe daily, CE, log-lik), NaN when RF / predictives missing, `run_evaluation` writes `scalars.csv` (5 columns), `rolling_sharpe.csv`, and `log_likelihood.csv` / `mahalanobis.csv` for predictive strategies only, one broken strategy doesn't stop the rest, empty folder raises.
-Existing TODO: `__main__` RF loading (`rf.csv` without Date → KeyError; real data re-derives RF from its own `START_DATE`). The RF logic lives inside `if __name__ == "__main__"`, so it can't be tested until it's pulled into a function (do that with the fix).
+~~Existing TODO: `__main__` RF loading (`rf.csv` without Date → KeyError; real data re-derives RF from its own `START_DATE`).~~ Fixed 2026-11-16 with the date index: `load_rf(folder)`, tested.
 
 - [x] (2026-11-15) `evaluate_all_strategies` catches each strategy's warnings and shows them again tagged `[algo_name]` (so identical messages from different strategies aren't collapsed into one by Python). Test added.
 - [ ] From 2.4: compute the log-likelihood / Mahalanobis series once per strategy (now 4 passes) and average them. Add the Sharpe-difference test (`compare_to_benchmark`) to the outputs (TOOLING_TODO).

@@ -11,8 +11,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import evaluation_pipeline as ev
 import pipeline_wrapper as pw
 import possibilistic_bayesian
+from predictive import load_predictive, make_predictive
 
 VW = "Average Value Weighted Returns -- Daily"
 EW = "Average Equal Weighted Returns -- Daily"
@@ -82,6 +84,10 @@ def test_real_loop_runs_value_and_equal_weighted_per_file(recorder, tmp_path):
     # VW block 1%/2% minus RF 0.1% ; EW block 3%/4% minus RF ; market kept
     vw, ew = recorder[0]["data"], recorder[1]["data"]
     assert list(vw.columns) == ["P1", "P2", "Mkt-RF"]
+    assert vw.index.equals(pd.bdate_range("1980-01-02", periods=6))  # dates
+    # RF saved next to the outputs, on the same dates
+    rf = ev.load_rf(folders[0])
+    assert rf.index.equals(vw.index) and np.allclose(rf, 0.001)
     assert np.allclose(vw["P1"], 0.009) and np.allclose(ew["P1"], 0.029)
     assert (
         recorder[0]["params"]["burn_in"] == 7
@@ -171,17 +177,17 @@ def test_simulated_loop_skips_missing_files(recorder, tmp_path, capsys):
 
 
 def test_save_algo_outputs(tmp_path):
-    w = pd.DataFrame({"a": [0.5, np.nan]})
-    ms = {"mu_hat": np.zeros((2, 1)), "sigma_hat": np.ones((2, 1, 1))}
+    dates = pd.bdate_range("2000-01-03", periods=2, name="Date")
+    w = pd.DataFrame({"a": [0.5, np.nan]}, index=dates)
+    ms = make_predictive(np.zeros((2, 1)), np.ones((2, 1, 1)), dates)
     pw._save_algo_outputs(tmp_path, "algo", weights=w, mu_sigma_dict=ms)
     assert sorted(p.name for p in tmp_path.iterdir()) == [
-        "algo_mus.npy",
-        "algo_sigmas.npy",
+        "algo_predictive.npz",
         "algo_weights.csv",
     ]
-    assert np.array_equal(
-        np.load(tmp_path / "algo_sigmas.npy"), ms["sigma_hat"]
-    )
+    back = load_predictive(tmp_path, "algo")
+    assert np.array_equal(back["sigma_hat"], ms["sigma_hat"])
+    assert back["index"].equals(dates)  # forecast keeps its dates
 
 
 PREDICTIVE = [
@@ -227,7 +233,7 @@ def test_per_dataset_run_writes_expected_files(
     expected |= {
         f"{a}_{s}"
         for a in PREDICTIVE
-        for s in ["mus.npy", "sigmas.npy", "longonly_weights.csv"]
+        for s in ["predictive.npz", "longonly_weights.csv"]
     }
     if with_market:
         expected.add("market_weight_weights.csv")
@@ -235,3 +241,34 @@ def test_per_dataset_run_writes_expected_files(
     pd.testing.assert_frame_equal(
         pd.read_csv(folder / "returns.csv", index_col=0), data
     )
+
+
+def test_dates_reach_every_output(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        possibilistic_bayesian,
+        "necessity_scores_fast",
+        lambda y_next, mus, **kw: np.ones(len(mus)),
+    )
+    rng = np.random.default_rng(0)
+    dates = pd.bdate_range("1990-01-02", periods=90, name="Date")
+    data = pd.DataFrame(
+        rng.normal(0.0005, 0.01, (90, 3)),
+        columns=["P1", "P2", "Mkt-RF"],
+        index=dates,
+    )
+    folder = pw.calculate_all_functions_perdatasets(
+        data,
+        "ds",
+        burn_in=30,
+        periods_until_investment=10,
+        max_models=8,
+        rolling_window_long=20,
+        rolling_window_short=10,
+        output_dir=tmp_path,
+    )
+    assert ev.load_returns(folder).index.equals(dates)
+    for algo in ev.discover_strategies(folder):
+        w, pred = ev.load_strategy_outputs(folder, algo)
+        assert w.index.equals(dates), algo
+        if pred is not None:
+            assert pred["index"].equals(dates), algo

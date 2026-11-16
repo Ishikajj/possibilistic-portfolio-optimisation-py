@@ -166,7 +166,7 @@ def test_prune_caps_models_but_keeps_newest():
 
 
 def test_run_core_shapes_and_nan_layout(returns):
-    pred, w = ba.run_core(returns, burn_in=40, periods_until_investment=20)
+    pred, w = ba.run_core(returns, burn_in=40, start=60)
     T = len(returns)
     assert pred["mu_hat"].shape == (T, N) and pred["sigma_hat"].shape == (
         T,

@@ -12,6 +12,7 @@ from distribution_evaluation_functions import (
     mahalanobis_distance_series,
     multivariate_log_likelihood_series,
 )
+from predictive import make_predictive
 
 
 @pytest.fixture
@@ -106,3 +107,16 @@ def test_clean_scoring_does_not_warn(setup):
         warnings.simplefilter("error")  # rows before investment are expected
         multivariate_log_likelihood_series(returns, pred)
         mahalanobis_distance_series(returns, pred)
+
+
+def test_forecast_from_other_dates_is_refused(setup):
+    returns, pred = setup
+    dates = pd.bdate_range("2000-01-03", periods=len(returns), name="Date")
+    returns = returns.set_axis(dates)
+    shifted = make_predictive(
+        pred["mu_hat"], pred["sigma_hat"], dates + pd.offsets.BDay(1)
+    )
+    with pytest.raises(ValueError, match="forecast index does not match"):
+        multivariate_log_likelihood_series(returns, shifted)
+    with pytest.raises(ValueError, match="forecast index does not match"):
+        mahalanobis_distance_series(returns, shifted)

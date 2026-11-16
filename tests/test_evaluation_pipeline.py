@@ -150,3 +150,39 @@ def test_empty_folder_raises(tmp_path):
     pd.DataFrame({"a": [0.0]}).to_csv(tmp_path / "returns.csv")
     with pytest.raises(ValueError):
         ev.evaluate_all_strategies(tmp_path)
+
+
+def test_weights_with_other_dates_are_refused(run_folder):
+    w = pd.read_csv(run_folder / "equal_weight_weights.csv", index_col=0)
+    w.index = w.index + 1  # shifted by one row
+    w.to_csv(run_folder / "shifted_weights.csv")
+    returns = ev.load_returns(run_folder)
+    with pytest.raises(ValueError, match="does not match returns.csv"):
+        ev.evaluate_strategy(returns, run_folder, "shifted")
+
+
+def test_load_rf_by_date_by_row_and_legacy(tmp_path):
+    dated = tmp_path / "dated"
+    dated.mkdir()
+    pd.DataFrame(
+        {"Date": ["2000-01-03", "2000-01-04"], "RF": [1e-4, 2e-4]}
+    ).to_csv(dated / "rf.csv", index=False)
+    rf = ev.load_rf(dated)
+    assert rf.index.equals(pd.DatetimeIndex(["2000-01-03", "2000-01-04"]))
+
+    rows = tmp_path / "rows"  # simulated runs: no Date column
+    rows.mkdir()
+    pd.DataFrame({"RF": [1e-4, 2e-4]}).to_csv(rows / "rf.csv", index=False)
+    assert ev.load_rf(rows).index.equals(pd.RangeIndex(2))
+
+    legacy = tmp_path / "legacy"  # old real runs: no rf.csv -> global RF
+    legacy.mkdir()
+    assert ev.load_rf(legacy).index[0] == 0
+
+
+def test_dates_in_returns_csv_are_read_back_as_dates(tmp_path):
+    dates = pd.bdate_range("2000-01-03", periods=3, name="Date")
+    pd.DataFrame({"a": [0.1, 0.2, 0.3]}, index=dates).to_csv(
+        tmp_path / "returns.csv"
+    )
+    assert ev.load_returns(tmp_path).index.equals(dates)

@@ -28,7 +28,7 @@ covariance matrix is common across assets.
 
 Entry point
 -----------
-run_core(returns_df, burn_in, periods_until_investment, ...)
+run_core(returns_df, burn_in, start, ...)
     Input : returns_df — pd.DataFrame of shape (T, n), numeric excess returns.
     Output: (mu_sigma_dict, weights_df)
         mu_sigma_dict — {"mu_hat": ndarray (T, n), "sigma_hat": ndarray (T, n, n)}
@@ -45,6 +45,7 @@ from scipy.special import multigammaln
 from config import DATASETS_DIR, RF_PATH
 from data_input import load_excess_returns, prepare_returns
 from markowitz import markowitz_unconstrained
+from predictive import make_predictive
 
 
 def sharing_prior_update(
@@ -348,14 +349,16 @@ def _prune_models(
 def run_core(
     returns_df: pd.DataFrame,
     burn_in: int = 1000,
-    periods_until_investment: int = 0,
+    start: int | None = None,
     prune_threshold: float = 1e-6,
     max_models: int | None = 2000,
     keep_newest: bool = True,
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
     """Run probabilistic Bayesian model averaging over NIW models.
 
-    Input : returns_df — (T, n) numeric excess returns, no Date/RF column.
+    Input : returns_df — (T, n) numeric excess returns, no RF column.
+            burn_in — first rows used only to set the prior.
+            start — first row with weights (None = burn_in).
     Output: (mu_sigma_dict, weights_df)
         mu_sigma_dict — {"mu_hat": (T, n), "sigma_hat": (T, n, n)}, NaN before burn-in.
         weights_df    — Markowitz weights (T, n), aligned to returns_df.index.
@@ -424,13 +427,12 @@ def run_core(
 
         sum_R += R_t
         sum_R2 += R_t**2
-    mu_sigma_dict = {"mu_hat": mu_hat_arr, "sigma_hat": sigma_hat_arr}
+    mu_sigma_dict = make_predictive(mu_hat_arr, sigma_hat_arr, returns_df.index)
 
     weights = markowitz_unconstrained(
         mu_sigma_dict=mu_sigma_dict,
         returns_df=returns_df,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=burn_in if start is None else start,
     )
 
     # VERY IMPORTANT: the returned mu_hat_arr and sigma_hat_arr have info upto time t, meaning they are predicting t+1.

@@ -2,9 +2,13 @@
 
 Each dataset folder produced by the pipeline is self-contained:
   returns.csv                  ← prepared returns (saved by calculate_all_functions_perdatasets)
-  <algo>_weights.csv           ← Markowitz weights
-  <algo>_mus.npy               ← predictive means   (predictive algos only)
-  <algo>_sigmas.npy            ← predictive covariances (predictive algos only)
+  <algo>_weights.csv           ← Markowitz weights, same index as returns.csv
+  <algo>_predictive.npz        ← forecast + its index (predictive algos only; predictive.py)
+                                 (runs before 2026-11-16: <algo>_mus.npy / _sigmas.npy)
+  rf.csv                       ← risk-free rate (real runs since 2026-11-16, simulated runs)
+
+Everything is matched by index label: dates for real data, row numbers for
+simulated data. Weights or forecasts whose index differs from returns.csv raise.
 
 After evaluation the same folder also receives:
   scalars.csv                  ← one row per algo, one col per scalar metric
@@ -15,7 +19,8 @@ After evaluation the same folder also receives:
 Module layout
 -------------
 load_returns               -- read returns.csv from a dataset folder
-load_strategy_outputs      -- read weights + optional mu/sigma for one algo
+load_rf                    -- read the risk-free series for a dataset folder
+load_strategy_outputs      -- read weights + optional forecast for one algo
 discover_strategies        -- list every algo saved in a folder
 compute_scalar_metrics     -- sharpe, CEQ, avg log-likelihood, avg mahalanobis
 compute_series_metrics     -- rolling sharpe, LL series, mahalanobis series
@@ -32,12 +37,12 @@ import sys
 import warnings
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config import SCALING_FACTOR
+from config import RF_PATH, SCALING_FACTOR
+from data_input import load_risk_free
 from distribution_evaluation_functions import (
     mahalanobis_distance_series,
     multivariate_log_likelihood_series,
@@ -48,6 +53,7 @@ from portfolio_evaluation_functions import (
     certainty_equivalent,
     rolling_sharpe_ratio,
 )
+from predictive import load_predictive
 
 _ROLLING_WINDOW = 252
 
@@ -55,11 +61,19 @@ _ROLLING_WINDOW = 252
 # ── 1. I/O helpers ─────────────────
 
 
-def load_returns(folder: Path | str) -> pd.DataFrame:
-    """Load the prepared returns DataFrame saved by the pipeline.
+def _read_indexed_csv(path: Path) -> pd.DataFrame:
+    """Read a CSV saved with its index; a ``Date`` index is parsed to dates."""
+    df = pd.read_csv(path, index_col=0)
+    if df.index.name == "Date":
+        df.index = pd.to_datetime(df.index)
+    return df
 
-    Reads ``returns.csv`` from ``folder``.  The index is preserved as-is
-    (integer positions when the pipeline saved numeric-only returns).
+
+def load_returns(folder: Path | str) -> pd.DataFrame:
+    """Load ``returns.csv`` from a run folder.
+
+    Indexed by Date for real data, by row number for simulated data (and for
+    real runs before 2026-11-16).
     """
     path = Path(folder) / "returns.csv"
     if not path.exists():
@@ -67,7 +81,27 @@ def load_returns(folder: Path | str) -> pd.DataFrame:
             f"returns.csv not found in {folder}. "
             "Was calculate_all_functions_perdatasets run on this folder?"
         )
-    return pd.read_csv(path, index_col=0)
+    return _read_indexed_csv(path)
+
+
+def load_rf(
+    folder: Path | str, legacy_start_date: str = "1980-01-01"
+) -> pd.Series:
+    """Risk-free series for a run folder, matched to returns.csv by index.
+
+    - ``rf.csv`` with a Date column → indexed by Date.
+    - ``rf.csv`` without Date (simulated runs since 2026-04-27) → row numbers,
+      like their returns.csv.
+    - no ``rf.csv`` (real runs before 2026-11-16, row-number index) → the
+      global French RF from ``legacy_start_date``, by row number as before.
+    """
+    rf_csv = Path(folder) / "rf.csv"
+    if not rf_csv.exists():
+        return load_risk_free(RF_PATH, legacy_start_date)["RF"]
+    rf = pd.read_csv(rf_csv)
+    if "Date" in rf.columns:
+        rf = rf.set_index(pd.to_datetime(rf["Date"]))
+    return rf["RF"]
 
 
 def load_strategy_outputs(
@@ -80,28 +114,15 @@ def load_strategy_outputs(
     -------
     weights_df : pd.DataFrame
     mu_sigma_dict : dict or None
-        ``{"mu_hat": ndarray (T,n), "sigma_hat": ndarray (T,n,n)}``
-        or ``None`` for weight-only algorithms.
+        Forecast dict (``predictive.load_predictive``), or ``None`` for
+        weight-only algorithms.
     """
     folder = Path(folder)
 
     weights_path = folder / f"{algo_name}_weights.csv"
     if not weights_path.exists():
         raise FileNotFoundError(f"Weights file not found: {weights_path}")
-    weights_df = pd.read_csv(weights_path, index_col=0)
-
-    mus_path = folder / f"{algo_name}_mus.npy"
-    sigmas_path = folder / f"{algo_name}_sigmas.npy"
-
-    if mus_path.exists() and sigmas_path.exists():
-        mu_sigma_dict = {
-            "mu_hat": np.load(mus_path),
-            "sigma_hat": np.load(sigmas_path),
-        }
-    else:
-        mu_sigma_dict = None
-
-    return weights_df, mu_sigma_dict
+    return _read_indexed_csv(weights_path), load_predictive(folder, algo_name)
 
 
 def discover_strategies(folder: Path | str) -> list[str]:
@@ -235,6 +256,10 @@ def evaluate_strategy(
     dict with keys ``"scalars"`` and ``"series"``.
     """
     weights_df, mu_sigma_dict = load_strategy_outputs(folder, algo_name)
+    if not weights_df.index.equals(returns_df.index):
+        raise ValueError(
+            f"{algo_name}_weights.csv index does not match returns.csv"
+        )
     scalars = compute_scalar_metrics(
         returns_df, weights_df, mu_sigma_dict, rf_series, theta
     )
@@ -399,22 +424,7 @@ def run_evaluation(
 
 
 if __name__ == "__main__":
-    from config import RF_PATH
-    from data_input import load_risk_free
-
     RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
-    START_DATE = "1980-01-01"
-
-    # Load global RF series (for KF datasets that don't have their own rf.csv)
-    global_rf = load_risk_free(RF_PATH, START_DATE)["RF"]
-
     for folder in sorted(RESULTS_DIR.iterdir()):
-        if not folder.is_dir():
-            continue
-        rf_csv = folder / "rf.csv"
-        if rf_csv.exists():
-            # Simulated datasets: rf.csv is Date-indexed, aligns with returns.csv
-            rf_series = pd.read_csv(rf_csv, index_col=0)["RF"]
-        else:
-            rf_series = global_rf
-        run_evaluation(folder, rf_series=rf_series)
+        if folder.is_dir():
+            run_evaluation(folder, rf_series=load_rf(folder))

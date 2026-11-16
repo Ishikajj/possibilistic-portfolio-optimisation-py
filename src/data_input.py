@@ -204,12 +204,13 @@ def load_excess_returns(
 
 
 def prepare_returns(
-    df: pd.DataFrame, drop_cols: tuple[str, ...] = ("Date", "RF")
+    df: pd.DataFrame, drop_cols: tuple[str, ...] = ("RF",)
 ) -> pd.DataFrame:
-    """Return numeric returns-only DataFrame."""
-    out = df.copy()
-    for c in drop_cols:
-        if c in out.columns:
-            out = out.drop(columns=c)
-    out = out.apply(pd.to_numeric, errors="coerce").dropna(how="any")
-    return out
+    """Numeric returns only, indexed by Date (if there is a Date column).
+
+    Drops ``drop_cols`` (RF by default) and rows with any missing value.
+    Mkt-RF and every portfolio are kept.
+    """
+    out = df.set_index("Date") if "Date" in df.columns else df.copy()
+    out = out.drop(columns=[c for c in drop_cols if c in out.columns])
+    return out.apply(pd.to_numeric, errors="coerce").dropna(how="any")

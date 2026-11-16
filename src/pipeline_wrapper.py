@@ -20,7 +20,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from markowitz import markowitz_long_only
@@ -41,6 +40,7 @@ from alternative_investment_rules import (
 )
 from config import RF_PATH
 from data_input import load_excess_returns, prepare_returns
+from predictive import save_predictive
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -51,22 +51,17 @@ def _save_algo_outputs(
     weights: pd.DataFrame | None = None,
     mu_sigma_dict: dict | None = None,
 ) -> None:
-    """Persist weights (CSV) and, where available, predictive moments (npy).
+    """Persist weights (CSV, indexed like the returns) and, where available,
+    the forecast with its index (<algo_name>_predictive.npz, see predictive.py).
 
     File naming convention:
       <algo_name>_weights.csv
-      <algo_name>_mus.npy
-      <algo_name>_sigmas.npy
+      <algo_name>_predictive.npz
     """
     if weights is not None:
         weights.to_csv(folder / f"{algo_name}_weights.csv")
     if mu_sigma_dict is not None:
-        mu_hat = mu_sigma_dict.get("mu_hat")
-        sigma_hat = mu_sigma_dict.get("sigma_hat")
-        if mu_hat is not None:
-            np.save(folder / f"{algo_name}_mus.npy", mu_hat)
-        if sigma_hat is not None:
-            np.save(folder / f"{algo_name}_sigmas.npy", sigma_hat)
+        save_predictive(folder, algo_name, mu_sigma_dict)
 
 
 # ── Public API ─────────────────────────────────
@@ -113,7 +108,8 @@ def calculate_all_functions_perdatasets(
     Parameters
     ----------
     dataset : pd.DataFrame
-        Numeric returns-only DataFrame (no Date / RF column).
+        Numeric returns only, no RF column; indexed by Date for real data
+        (row numbers for simulated data). The index is carried to every output.
     dataset_name : str
         Used as the output sub-folder name.
     burn_in : int
@@ -153,12 +149,15 @@ def calculate_all_functions_perdatasets(
     returns_df = dataset.copy()
     returns_df.to_csv(folder / "returns.csv")
 
+    # First row with weights, for every strategy (burn_in is also passed on
+    # to the averaging methods, which use it to set their prior).
+    start = burn_in + periods_until_investment
+
     # 1. 1/N ───────────────────────────────────────────────
     print(f"[{dataset_name}] 1/N equal weight...")
     weights_1n = equal_weight_strategy(
         returns_df,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
     )
     _save_algo_outputs(folder, "equal_weight", weights=weights_1n)
 
@@ -167,8 +166,7 @@ def calculate_all_functions_perdatasets(
         print(f"[{dataset_name}] Market weight...")
         weights_mkt = market_weight_strategy(
             returns_df,
-            burn_in=burn_in,
-            periods_until_investment=periods_until_investment,
+            start=start,
         )
         _save_algo_outputs(folder, "market_weight", weights=weights_mkt)
 
@@ -176,8 +174,7 @@ def calculate_all_functions_perdatasets(
     print(f"[{dataset_name}] Minimum variance...")
     weights_mv = minimum_variance_strategy(
         returns_df,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
         window=rolling_window_long,
     )
     _save_algo_outputs(folder, "minimum_variance", weights=weights_mv)
@@ -186,8 +183,7 @@ def calculate_all_functions_perdatasets(
     print(f"[{dataset_name}] Historical expanding-window Markowitz...")
     hist_ms, weights_hist = historical_expectations_weights(
         returns_df,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
     )
     _save_algo_outputs(
         folder,
@@ -203,8 +199,7 @@ def calculate_all_functions_perdatasets(
     roll_long_ms, weights_roll = rolling_window_weights(
         returns_df,
         window=rolling_window_long,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
     )
     _save_algo_outputs(
         folder,
@@ -220,8 +215,7 @@ def calculate_all_functions_perdatasets(
     roll_short_ms, weights_roll = rolling_window_weights(
         returns_df,
         window=rolling_window_short,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
     )
     _save_algo_outputs(
         folder,
@@ -235,8 +229,7 @@ def calculate_all_functions_perdatasets(
     jbs_ms, weights_jbs = jorion_bayes_stein_strategy(
         returns_df,
         window=rolling_window_long,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
         theta=theta,
     )
     _save_algo_outputs(
@@ -248,8 +241,7 @@ def calculate_all_functions_perdatasets(
     kz_ms, weights_kz = kan_zhou_three_fund_strategy(
         returns_df,
         window=rolling_window_long,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
         theta=theta,
     )
     _save_algo_outputs(
@@ -261,7 +253,7 @@ def calculate_all_functions_perdatasets(
     bay_ms, weights_bay = bayesian_averaging.run_core(
         returns_df,
         burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
     )
     _save_algo_outputs(
         folder, "bayesian_averaging", weights=weights_bay, mu_sigma_dict=bay_ms
@@ -280,7 +272,7 @@ def calculate_all_functions_perdatasets(
     ) = possibilistic_bayesian.run_core(
         returns_df,
         burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
+        start=start,
         merge_threshold=merge_threshold,
         max_models=max_models,
         nu_bandwidth=nu_bandwidth,
@@ -320,8 +312,7 @@ def calculate_all_functions_perdatasets(
         long_only_weights = markowitz_long_only(
             mu_sigma_dict=mu_sigma,
             returns_df=returns_df,
-            burn_in=burn_in,
-            periods_until_investment=periods_until_investment,
+            start=start,
             theta=theta,
         )
         long_only_weights.to_csv(folder / f"{algo_name}_longonly_weights.csv")
@@ -409,7 +400,7 @@ def call_all_datasets(
                 )
                 continue
 
-            returns_df = prepare_returns(excess_df)
+            returns_df = prepare_returns(excess_df)  # indexed by Date
 
             folder = calculate_all_functions_perdatasets(
                 dataset=returns_df,
@@ -428,6 +419,8 @@ def call_all_datasets(
                 output_dir=output_dir,
                 device=device,
             )
+            # RF on the same dates, so evaluation matches it by date (CEQ).
+            excess_df[["Date", "RF"]].to_csv(folder / "rf.csv", index=False)
             output_folders.append(folder)
 
     return output_folders
