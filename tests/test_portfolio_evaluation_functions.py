@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from portfolio_evaluation_functions import (
+from possibilistic_portfolio.portfolio_evaluation_functions import (
     SharpeTestResult,
     _newey_west_cov,
     average_turnover,

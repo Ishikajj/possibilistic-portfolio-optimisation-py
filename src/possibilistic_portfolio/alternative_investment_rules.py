@@ -30,19 +30,18 @@ from scipy.special import (
     betainc as _betainc,
 )  # regularized incomplete beta I_x(a,b)
 
-from config import ROLLING_WINDOW_LONG, THETA
-from markowitz import markowitz_unconstrained
-from predictive import make_predictive
+from possibilistic_portfolio.config import ROLLING_WINDOW_LONG, THETA
+from possibilistic_portfolio.markowitz import markowitz_unconstrained
+from possibilistic_portfolio.predictive import make_predictive
 
 
 def _incomplete_beta_unregularized(a: float, b: float, x: float) -> float:
-    r"""Return unregularized incomp2lete beta B_x(a,b) = \int_0^x t^{a-1} (1-t)^{b-1} dt."""
+    r"""Return unregularized incomplete beta B_x(a,b) = \int_0^x t^{a-1} (1-t)^{b-1} dt."""
     if not (0.0 <= x <= 1.0) or not np.isfinite(x):
         return float("nan")
 
-    if _betainc is not None and _beta is not None:
-        # B_x(a,b) = I_x(a,b) * B(a,b)
-        return float(_betainc(a, b, x) * _beta(a, b))
+    # B_x(a,b) = I_x(a,b) * B(a,b)
+    return float(_betainc(a, b, x) * _beta(a, b))
 
 
 def _solve_or_pinv(A: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -247,7 +246,7 @@ def jorion_bayes_stein_estimates(
 
     for t in range(start, end):
         ret_window = returns_df.iloc[t - w + 1 : t + 1]
-        mu_t = ret_window.mean().values
+        mu_t = ret_window.mean().to_numpy()
 
         # pandas cov(ddof=1) gives (1/(w-1)) S; paper uses (1/c) S
         cov_ddof1 = ret_window.cov(ddof=1).values
@@ -358,7 +357,7 @@ def kan_zhou_three_fund_estimates(
 
     for t in range(start, end):
         ret_window = returns_df.iloc[t - w + 1 : t + 1]
-        mu_t = ret_window.mean().values
+        mu_t = ret_window.mean().to_numpy()
 
         # MLE covariance (c=w)
         Sigma_t = ret_window.cov(ddof=0).values

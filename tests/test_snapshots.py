@@ -41,10 +41,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import possibilistic_bayesian
+from possibilistic_portfolio import possibilistic_bayesian
 
 HERE = Path(__file__).resolve().parent
-SRC = HERE.parent / "src"
 REFERENCE = HERE / "snapshots" / "reference_no_necessity.npz"
 
 
@@ -52,6 +51,7 @@ def _load_make_snapshots():
     spec = importlib.util.spec_from_file_location(
         "make_snapshots", HERE / "snapshots" / "make_snapshots.py"
     )
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -67,7 +67,7 @@ ms = _load_make_snapshots()
     not REFERENCE.exists(),
     reason=f"{REFERENCE.name} missing (gitignored); regenerate from the "
     "current code (`dev` + the fixes in the module docstring): uv run python "
-    "tests/snapshots/make_snapshots.py --src src "
+    "tests/snapshots/make_snapshots.py "
     f"--out {REFERENCE.relative_to(HERE.parent)} --bypass-necessity",
 )
 def test_pipeline_matches_fyp_reference(monkeypatch, capsys):
@@ -76,7 +76,7 @@ def test_pipeline_matches_fyp_reference(monkeypatch, capsys):
         "necessity_scores_fast",
         lambda y_next, mus, **kw: np.ones(len(mus)),
     )
-    new = ms.build(SRC, bypass_necessity=False)  # bypass already patched above
+    new = ms.build(bypass_necessity=False)  # bypass already patched above
     capsys.readouterr()  # drop the pipeline's progress prints
     ok = ms.compare(new, REFERENCE)
     report = capsys.readouterr().out

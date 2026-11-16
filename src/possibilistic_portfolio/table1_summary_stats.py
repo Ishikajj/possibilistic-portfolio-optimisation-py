@@ -10,22 +10,29 @@ codes (-99.99, -999) are replaced with NaN. Simulated datasets are in decimals i
 and multiplied by 100 for display consistency with Panels A and B.
 
 Entry point:
-    python src/table1_summary_stats.py
-Writes table1.tex to src/.
+    uv run python -m possibilistic_portfolio.table1_summary_stats
+Writes table1.tex to config.FIGURES_DIR (figures/, gitignored).
 """
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config import DATASETS_DIR, SIM_N_ASSETS, SIM_SEED, SIM_T
-from data_input import load_portfolios
-from simulated_datasets import generate_and_save_sim_datasets, sim_paths
+from possibilistic_portfolio.config import (
+    DATASETS_DIR,
+    FIGURES_DIR,
+    SIM_N_ASSETS,
+    SIM_SEED,
+    SIM_T,
+)
+from possibilistic_portfolio.data_input import load_portfolios
+from possibilistic_portfolio.simulated_datasets import (
+    generate_and_save_sim_datasets,
+    sim_paths,
+)
 
 # ---------------------------------------------------------------------------
 # Portfolio configuration
@@ -316,6 +323,7 @@ if __name__ == "__main__":
         label="tab:summary_c",
     )
 
-    out = Path(__file__).parent / "table1.tex"
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    out = FIGURES_DIR / "table1.tex"
     out.write_text(latex_a + "\n\n" + latex_b + "\n\n" + latex_c)
     print(f"\nLaTeX written to {out}")

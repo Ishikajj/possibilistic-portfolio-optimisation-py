@@ -10,9 +10,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import evaluation_pipeline as ev
-from distribution_evaluation_functions import multivariate_log_likelihood_series
-from portfolio_evaluation_functions import (
+from possibilistic_portfolio import evaluation_pipeline as ev
+from possibilistic_portfolio.distribution_evaluation_functions import (
+    multivariate_log_likelihood_series,
+)
+from possibilistic_portfolio.portfolio_evaluation_functions import (
     calculate_sharpe_ratio,
     certainty_equivalent,
 )
@@ -59,6 +61,7 @@ def test_discover_strategies_includes_long_only(run_folder):
 
 def test_load_strategy_outputs(run_folder):
     w, pred = ev.load_strategy_outputs(run_folder, "model")
+    assert pred is not None
     assert w.shape == (T, N) and pred["sigma_hat"].shape == (T, N, N)
     _, none = ev.load_strategy_outputs(run_folder, "equal_weight")
     assert none is None
@@ -74,6 +77,7 @@ def test_load_returns_missing_folder_raises(tmp_path):
 def test_scalar_metrics_wire_up_the_metric_functions(run_folder, rf):
     returns = ev.load_returns(run_folder)
     w, pred = ev.load_strategy_outputs(run_folder, "model")
+    assert pred is not None
     data = ev.StrategyData(returns, w, pred, rf, theta=2.0)
     out = ev.compute_metrics(data)["scalars"]
     assert np.isclose(
@@ -149,8 +153,10 @@ def test_one_broken_strategy_does_not_stop_the_rest(run_folder, rf, capsys):
     assert "WARNING" in capsys.readouterr().out
     ev.save_evaluation_results(results, run_folder)
     scalars = pd.read_csv(run_folder / "scalars.csv", index_col=0)
-    assert scalars.loc["broken"].isna().all()  # kept as an all-NaN row
-    assert scalars.loc["model"].notna().any()
+    assert (
+        scalars.loc["broken"].isna().to_numpy().all()
+    )  # kept as an all-NaN row
+    assert scalars.loc["model"].notna().to_numpy().any()
 
 
 def test_metric_warnings_are_tagged_with_strategy_name(run_folder):

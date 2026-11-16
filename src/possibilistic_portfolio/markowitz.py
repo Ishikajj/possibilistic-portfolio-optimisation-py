@@ -35,8 +35,8 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
-from config import THETA
-from predictive import check_aligned
+from possibilistic_portfolio.config import THETA
+from possibilistic_portfolio.predictive import check_aligned
 
 
 def markowitz_step(

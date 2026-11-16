@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import data_input as di
-from config import DATASETS_DIR, RF_PATH
+from possibilistic_portfolio import data_input as di
+from possibilistic_portfolio.config import DATASETS_DIR, RF_PATH
 
 VW = di.TABLE_TITLES["value"]
 EW = di.TABLE_TITLES["equal"]

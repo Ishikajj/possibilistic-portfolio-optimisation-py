@@ -9,8 +9,8 @@ import pandas as pd
 import pytest
 from scipy.integrate import quad
 
-import alternative_investment_rules as air
-from markowitz import markowitz_step
+from possibilistic_portfolio import alternative_investment_rules as air
+from possibilistic_portfolio.markowitz import markowitz_step
 
 T, N = 120, 3
 BURN, PIU = 40, 10
@@ -93,7 +93,7 @@ def test_minimum_variance(returns):
     _assert_nan_layout(w, FIRST)
     assert np.allclose(w.iloc[FIRST:-1].sum(axis=1), 1.0)
     t = 70
-    S = _window_rows(returns, t, win).cov().values
+    S = _window_rows(returns, t, win).cov().to_numpy()
     expected = np.linalg.solve(S, np.ones(N))
     assert np.allclose(w.iloc[t], expected / expected.sum())
 
@@ -132,8 +132,10 @@ def test_rolling_window_moments(returns):
 def _jorion_by_hand(rows: pd.DataFrame):
     """Jorion (1986) written out independently from the paper."""
     w, n = rows.shape
-    mu = rows.mean().values
-    S = rows.cov(ddof=0).values * w / (w - n - 2)  # sum of squares / (w-n-2)
+    mu = rows.mean().to_numpy()
+    S = (
+        rows.cov(ddof=0).to_numpy() * w / (w - n - 2)
+    )  # sum of squares / (w-n-2)
     ones = np.ones(n)
     Si = np.linalg.inv(S)
     mu_g = (ones @ Si @ mu) / (ones @ Si @ ones)
@@ -183,12 +185,14 @@ def test_kan_zhou_estimates(returns):
     est = air.kan_zhou_three_fund_estimates(returns, start=FIRST, window=win)
     t = 70
     rows = _window_rows(returns, t, win)
-    S = rows.cov(ddof=0).values
+    S = rows.cov(ddof=0).to_numpy()
     assert np.allclose(est["Sigma"][t], S)  # MLE covariance (divide by w)
-    _, mu_g_vec, _ = air._minvar_mean_target(rows.mean().values, S, np.ones(N))
+    _, mu_g_vec, _ = air._minvar_mean_target(
+        rows.mean().to_numpy(), S, np.ones(N)
+    )
     v = est["v"][t]
     assert np.allclose(
-        est["mu_star"][t], (1 - v) * rows.mean().values + v * mu_g_vec
+        est["mu_star"][t], (1 - v) * rows.mean().to_numpy() + v * mu_g_vec
     )
     h = ((win - N - 1) * (win - N - 4)) / (win * (win - 2))
     assert np.isclose(est["h"][0], h)

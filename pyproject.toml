@@ -16,11 +16,21 @@ dependencies = [
     "seaborn>=0.13.2",
 ]
 
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# project name possibilistic-portfolio-optimisation-py would map to a
+# different module name; the code lives in src/possibilistic_portfolio/
+module-name = "possibilistic_portfolio"
+
 [dependency-groups]
 dev = [
     "ruff",
     "pandas-stubs>=3.0.0.260204",
     "pytest>=9.2.0",
+    "scipy-stubs>=1.17.1.5",
 ]
 
 [tool.ruff]
@@ -38,7 +48,7 @@ ignore = [
 [tool.pyright]
 # Read by Pylance in VS Code
 typeCheckingMode = "basic"
+exclude = ["archive"]  # unused old code
 
 [tool.pytest.ini_options]
-  testpaths = ["tests"]   # where your tests live
-  pythonpath = ["src"]
+testpaths = ["tests"]  # the package is installed into the venv (uv sync)

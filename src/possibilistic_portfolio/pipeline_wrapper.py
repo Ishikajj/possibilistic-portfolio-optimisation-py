@@ -12,24 +12,18 @@ call_all_datasets(portfolios_paths, ...)
 
 call_all_simulated_datasets(sim_data_dir, sim_files, ...)
     Loop over pre-generated simulated dataset CSVs (produced by
-    table1_summary_stats.generate_and_save_sim_datasets).
+    simulated_datasets.generate_and_save_sim_datasets).
 """
 
 from __future__ import annotations
 
-import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import pandas as pd
 
-from markowitz import markowitz_long_only
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-
-import bayesian_averaging
-import possibilistic_bayesian
-from alternative_investment_rules import (
+from possibilistic_portfolio import bayesian_averaging, possibilistic_bayesian
+from possibilistic_portfolio.alternative_investment_rules import (
     equal_weight_strategy,
     historical_expectations_weights,
     jorion_bayes_stein_strategy,
@@ -38,9 +32,11 @@ from alternative_investment_rules import (
     minimum_variance_strategy,
     rolling_window_weights,
 )
-from config import (
+from possibilistic_portfolio.config import (
     BAYESIAN_MAX_MODELS,
     BURN_IN,
+    DATASETS_DIR,
+    FRENCH_PORTFOLIO_FILES,
     K_NEIGHBOURS,
     MERGE_THRESHOLD,
     NECESSITY_DEVICE,
@@ -49,17 +45,20 @@ from config import (
     NU_BANDWIDTH,
     PERIODS_UNTIL_INVESTMENT,
     POSSIBILISTIC_MAX_MODELS,
+    RESULTS_DIR,
     RF_PATH,
     ROLLING_WINDOW_LONG,
     ROLLING_WINDOW_SHORT,
     SIM_DATA_DIR,
-    SIM_N_ASSETS,
-    SIM_SEED,
-    SIM_T,
     THETA,
 )
-from data_input import load_excess_returns, prepare_returns
-from predictive import save_predictive
+from possibilistic_portfolio.data_input import (
+    load_excess_returns,
+    prepare_returns,
+)
+from possibilistic_portfolio.markowitz import markowitz_long_only
+from possibilistic_portfolio.predictive import save_predictive
+from possibilistic_portfolio.simulated_datasets import DGPS, sim_paths
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -335,7 +334,7 @@ def calculate_all_functions_perdatasets(
 
 
 def call_all_datasets(
-    portfolios_paths: list[Path | str],
+    portfolios_paths: Sequence[Path | str],
     risk_free_path: Path | str = RF_PATH,
     start_date: str | None = "1963-01-01",
     end_date: str | None = None,
@@ -462,7 +461,7 @@ def call_all_simulated_datasets(
     """Run the full algorithm suite on all saved simulated datasets.
 
     Loads portfolio CSVs and their paired RF CSVs from ``sim_data_dir``
-    (written by ``generate_and_save_sim_datasets`` in table1_summary_stats.py).
+    (written by ``simulated_datasets.generate_and_save_sim_datasets``).
     Data is already excess returns in decimals — no marker parsing or RF
     subtraction needed.  The RF CSV is copied into each output folder so
     the evaluation pipeline can compute CEQ.
@@ -485,7 +484,7 @@ def call_all_simulated_datasets(
             if not p.exists():
                 print(
                     f"  [WARNING] {p} not found — skipping {dataset_name}. "
-                    "Run generate_and_save_sim_datasets() in table1_summary_stats.py first."
+                    "Run simulated_datasets.generate_and_save_sim_datasets() first."
                 )
                 break
         else:
@@ -525,41 +524,11 @@ def call_all_simulated_datasets(
 
 
 def main_simulated():
-    # File list rebuilt from simulated_datasets in 2.10 (P1 / P2).
-    SIM_N = SIM_N_ASSETS
-
-    sim_files = [
-        (
-            "iid",
-            f"iid_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
-            f"rf_iid_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
-        ),
-        (
-            "reg",
-            f"reg_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
-            f"rf_reg_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
-        ),
-        (
-            "break",
-            f"break_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
-            f"rf_break_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
-        ),
-        (
-            "mr",
-            f"mr_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
-            f"rf_mr_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
-        ),
-        (
-            "cov_break",
-            f"cov_break_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
-            f"rf_cov_break_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
-        ),
-        (
-            "stoch_vol",
-            f"stoch_vol_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
-            f"rf_stoch_vol_T{SIM_T}_N{SIM_N}_seed{SIM_SEED}.csv",
-        ),
-    ]
+    # Saved CSVs of every DGP (see simulated_datasets.sim_paths / DGPS).
+    sim_files = []
+    for label in DGPS:
+        data_csv, rf_csv = sim_paths(label)
+        sim_files.append((label, data_csv.name, rf_csv.name))
 
     return call_all_simulated_datasets(
         sim_data_dir=SIM_DATA_DIR,
@@ -576,24 +545,13 @@ def main_simulated():
         rolling_window_long=252,
         rolling_window_short=63,
         device="cuda",
-        output_dir=Path(__file__).resolve().parent.parent / "results",
+        output_dir=RESULTS_DIR,
     )
 
 
 def main():
-    portfolio_paths = [
-        "../datasets/6_Portfolios_size_momentum.csv",
-        "../datasets/10_Portfolios_ltr.csv",
-        "../datasets/6_Portfolios_size_str.csv",
-        "../datasets/10_Portfolios_Prior_momentum.csv",
-        "../datasets/10_Portfolios_Prior_str.csv",
-        "../datasets/10_Industry_Portfolios_Daily.csv",
-        "../datasets/10_Portfolios_Formed_on_booktomarket.csv",
-        "../datasets/10_Portfolios_Formed_on_ME_size.csv",
-        "../datasets/6_Portfolios_size_ltr.csv",
-        "../datasets/6_Portfolios_size_btm.csv",
-    ]
-    risk_free_path = "../datasets/F-F_Research_Data_Factors_daily.csv"
+    portfolio_paths = [DATASETS_DIR / f for f in FRENCH_PORTFOLIO_FILES]
+    risk_free_path = RF_PATH
 
     start_date = "1980-01-01"
 
@@ -634,7 +592,7 @@ def main():
         rolling_window_long=rolling_window_long,
         rolling_window_short=rolling_window_short,
         device="cuda",
-        output_dir=Path(__file__).resolve().parent.parent / "results",
+        output_dir=RESULTS_DIR,
     )
 
 

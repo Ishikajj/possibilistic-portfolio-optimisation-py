@@ -9,7 +9,7 @@ matplotlib.use("Agg")  # no display needed
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-import plot_weight_distributions as pwd  # noqa: E402
+from possibilistic_portfolio import plot_weight_distributions as pwd  # noqa: E402
 
 
 def _write_weights(folder: Path, algo: str, values: list[float]) -> None:

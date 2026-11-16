@@ -10,8 +10,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
-OUTPUT_PATH = Path(__file__).resolve().parent / "weight_distributions.png"
+from possibilistic_portfolio.config import FIGURES_DIR, RESULTS_DIR
+
+OUTPUT_PATH = FIGURES_DIR / "weight_distributions.png"
 
 # (algo_name, display_label, group) — group drives colour
 STRATEGIES = [
@@ -137,6 +138,7 @@ def plot(pooled: dict[str, np.ndarray]) -> None:
     ax.legend(handles=legend_elements, loc="upper right", fontsize=9)
 
     plt.tight_layout()
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(OUTPUT_PATH, dpi=150)
     print(f"Saved to {OUTPUT_PATH}")
     plt.close()

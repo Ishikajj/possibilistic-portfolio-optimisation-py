@@ -4,7 +4,7 @@
 
 ## Primary — things that will bottleneck development
 
-- [ ] **P1. Pipeline is all-or-nothing** — `calculate_all_functions_perdatasets` (`src/pipeline_wrapper.py`, 256 lines) hard-codes all 11 algorithms in sequence, including the ~90-min possibilistic run. Can't run only Bayesian averaging, or add/swap an algorithm, without editing this function. Idea: a registry of `{name: callable}` and an `algorithms=[...]` argument.
+- [ ] **P1. Pipeline is all-or-nothing** — `calculate_all_functions_perdatasets` (`src/possibilistic_portfolio/pipeline_wrapper.py`, 256 lines) hard-codes all 11 algorithms in sequence, including the ~90-min possibilistic run. Can't run only Bayesian averaging, or add/swap an algorithm, without editing this function. Idea: a registry of `{name: callable}` and an `algorithms=[...]` argument.
 - [ ] **P2. Parameters threaded through 3 layers** — `main()` → `call_all_datasets` (17 params) → `calculate_all_functions_perdatasets` (15 params) → each algorithm. Adding one parameter means editing every layer. Idea: one config dataclass passed down.
 - [x] **P3. Bayesian averaging silently ignores pipeline settings** — fixed 2026-11-16 (argument redesign): theta now reaches historical, rolling, Bayesian and possibilistic (all ignored it); Bayesian `max_models` is its own explicit setting `config.BAYESIAN_MAX_MODELS`. Original: — `bayesian_averaging.run_core` takes no `theta` (always uses Markowitz default `theta=1`) and isn't passed `max_models` (uses its own default 2000; possibilistic gets 100). Fine today because `theta=1`, but changing `theta` would not affect Bayesian. Matters now that Bayesian averaging is the main method.
 - [x] **P4. Check `_new_model_prior` denominators** — Bayesian used `t-1`/`t-2`, possibilistic `t`/`t-1`. Both loops hold `t` returns (rows 0…t-1) in `sum_R` at step t, so Bayesian was off by one. **Done 2026-11-16:** Bayesian uses `t`/`t-1`; both functions now identical (tested), and a test pins the `sum_R` dataflow in both `run_core`s. Snapshot: only Bayesian changed (Sharpe 0.17788 → 0.17791 on the real slice).
@@ -35,28 +35,33 @@
 - [x] 2.5 Lockfile in sync.
 - [x] 2.6 PyTorch — not adding; GPU necessity no longer planned.
   - History: Apr 2026 (`c035489`) torch 2.11.0 + CUDA 13 from PyPI, reverted (`ba2b8e4`). If GPU needed again: PyTorch CUDA index via `[tool.uv.sources]` (https://docs.astral.sh/uv/guides/integration/pytorch/).
-  - Breaks without torch: `device="cuda"` runs (`src/faster_necessity.py:603`); both `main()`s in `pipeline_wrapper.py`; `comparison_cpu_gpu.py`.
+  - Breaks without torch: `device="cuda"` runs (`src/possibilistic_portfolio/faster_necessity.py:603`); both `main()`s in `pipeline_wrapper.py`; `comparison_cpu_gpu.py`.
   - Works without torch: Bayesian averaging, benchmarks, evaluation, notebooks, possibilistic on `device="cpu"`.
 - [x] 3 Formatting — 6 files formatted; all pass `ruff format --check`.
 - [x] 4 Linting — 22 safe fixes; B905 disabled. 11 left on purpose (B023 false positive in `markowitz.py`, F821 in `compute_longonly_weights.py`, scratch-notebook noise).
 - [x] 5 Type checking — Pylance in VS Code, workspace mode.
 - [x] 6 pytest — 3 illustrative tests in `tests/test_markowitz.py`; `.gitignore` narrowed to `src/tests/`.
 - [x] 8 Pre-commit / CI — skipped for now.
+- [x] Type errors 87 → 15, 2026-11-16 (`uvx pyright`, the checker inside Pylance, same `[tool.pyright]` settings). Almost all were already there before the package move: missing `assert x is not None` / type hints in tests, `.values` → `.to_numpy()`, `Sequence` for list arguments. `scipy-stubs` added to the dev group (fixed `multigammaln`; found `_sample_iw_sigmas` crashing for n = 1, fixed with a reshape). `archive/` excluded. No `# pyright: ignore` comments (errors stay visible). Left on purpose:
+  - 9× `import torch` in `faster_necessity.py` — optional, not installed (GPU only).
+  - `np.savez_compressed(path, **result)` in `make_snapshots.py` / `necessity_baseline.py` — numpy's stubs: a dict key could clash with `allow_pickle`.
+  - `multivariate_t(df=5.0)` in `test_bayesian_averaging.py` — scipy-stubs types `df` as int; scipy documents it as float (stub bug).
+  - 14 errors in `analysis.ipynb` — not looked at (notebook).
 
 ### Open (low priority)
-- [~] 2.7 / 7 Package layout (`src/possibilistic_portfolio/` + `[build-system]`) — removes `sys.path` hacks; nice-to-have.
+- [x] 2.7 / 7 Package layout (`src/possibilistic_portfolio/` + `[build-system]`) — done 2026-11-16 (REFACTOR_PLAN Part 1): `uv_build` backend, absolute imports, `sys.path` hacks removed, all paths from `config.py`.
 - [ ] **Replace `np.linalg.inv(A) @ b` with `np.linalg.solve(A, b)`** — faster and more accurate when only `A⁻¹b` is needed (keep `inv` where the full inverse is genuinely needed). ⚠️ Changes floating-point results in the last digits → `tests/test_snapshots.py` (bit-for-bit) will fail; regenerate references, own commit. Occurrences (2026-11-15):
-  - `src/markowitz.py:38` (`markowitz_step`) — `inv(sigma_t)` then `@ mu_t` → `solve(sigma_t, mu_t) / theta`. Tie in with the singular-Σ bug above (step 2.1): `solve` still raises on exactly singular Σ, so maybe use `_solve_or_pinv`. Afterwards `test_step_matches_closed_form` would compare `solve` with `solve` → switch its expected value to `inv` (or `cho_solve`) to stay independent.
-  - `src/alternative_investment_rules.py:194` (`minimum_variance_strategy`) — `inv(sigma_hat_t) @ ones` → `_solve_or_pinv(sigma_hat_t, np.ones(n))` (helper already in the file, used by Jorion / Kan-Zhou).
+  - `src/possibilistic_portfolio/markowitz.py:38` (`markowitz_step`) — `inv(sigma_t)` then `@ mu_t` → `solve(sigma_t, mu_t) / theta`. Tie in with the singular-Σ bug above (step 2.1): `solve` still raises on exactly singular Σ, so maybe use `_solve_or_pinv`. Afterwards `test_step_matches_closed_form` would compare `solve` with `solve` → switch its expected value to `inv` (or `cho_solve`) to stay independent.
+  - `src/possibilistic_portfolio/alternative_investment_rules.py:194` (`minimum_variance_strategy`) — `inv(sigma_hat_t) @ ones` → `_solve_or_pinv(sigma_hat_t, np.ones(n))` (helper already in the file, used by Jorion / Kan-Zhou).
   - `tests/test_alternative_investment_rules.py:139` — reference Jorion; `Si` reused in 3 quadratic forms. Optional (test reference code).
   - `tests/test_possibilistic_bayesian.py:214` — expected Mahalanobis distance; `solve((S1+S2)/2, d)`. Optional.
-  - **Keep:** `tests/test_distribution_evaluation_functions.py:43` (scipy `mahalanobis` takes the inverse matrix `VI` as input); `pinv` in `src/alternative_investment_rules.py:46` (deliberate singular fallback).
+  - **Keep:** `tests/test_distribution_evaluation_functions.py:43` (scipy `mahalanobis` takes the inverse matrix `VI` as input); `pinv` in `src/possibilistic_portfolio/alternative_investment_rules.py:46` (deliberate singular fallback).
 - [x] Write proper tests — done 2026-11-13: one `tests/test_<module>.py` per module + `tests/test_snapshots.py` (REFACTOR_PLAN Part 2).
 - [x] `src/compute_longonly_weights.py` — deleted (long-only now computed in the pipeline); Sharpe test moved to `portfolio_evaluation_functions.py`.
-- [ ] `src/alternative_investment_rules.py:31` — `-> float` function can fall through without returning.
-- [ ] `src/necessity_alternative_methods/annealing.py:326` — invalid `seed` argument.
+- [x] `alternative_investment_rules._incomplete_beta_unregularized` — `-> float` function could fall through without returning. Fixed 2026-11-16: dead `if _betainc is not None` branch removed (scipy is always imported), docstring typo fixed.
+- [~] `archive/necessity_archive/annealing.py:326` — invalid `seed` argument. Not fixed (unused old code); `archive/` is excluded from pyright.
 - [ ] `.gitignore` hides `.vscode/`. (`comparison_cpu_gpu.py`, `compute_longonly_weights.py` deleted, lines removed.)
-- [ ] `CLAUDE.md` out of date (lists removed files).
+- [x] `CLAUDE.md` out of date (lists removed files) — updated 2026-11-16 with the package move (local file, gitignored).
 
 ## After the paper — research design (not refactor)
 

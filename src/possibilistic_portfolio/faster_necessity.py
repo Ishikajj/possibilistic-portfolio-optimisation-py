@@ -248,11 +248,11 @@ def _sample_iw_sigmas(
         # Mirrors GPU behaviour which clamps dof rather than raising.
         return []
 
-    Sigmas = invwishart.rvs(
-        df=nu, scale=Lambda, size=n_samples, random_state=rng
+    # rvs drops size-1 axes (one sample: (n, n); n = 1: a float) → (S, n, n)
+    Sigmas = np.reshape(
+        invwishart.rvs(df=nu, scale=Lambda, size=n_samples, random_state=rng),
+        (n_samples, n, n),
     )
-    if n_samples == 1:
-        Sigmas = Sigmas[np.newaxis, :, :]
 
     out: list[np.ndarray] = []
     for s in range(n_samples):

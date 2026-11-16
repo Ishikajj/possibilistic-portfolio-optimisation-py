@@ -6,8 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import markowitz
-from markowitz import (
+from possibilistic_portfolio import markowitz
+from possibilistic_portfolio.markowitz import (
     markowitz_long_only,
     markowitz_step,
     markowitz_step_long_only,

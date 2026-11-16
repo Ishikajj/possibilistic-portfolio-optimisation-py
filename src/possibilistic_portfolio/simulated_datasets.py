@@ -30,7 +30,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import SIM_DATA_DIR, SIM_N_ASSETS, SIM_SEED, SIM_T
+from possibilistic_portfolio.config import (
+    SIM_DATA_DIR,
+    SIM_N_ASSETS,
+    SIM_SEED,
+    SIM_T,
+)
 
 # -----------------
 # Shared constants (annualised figures scaled to daily)

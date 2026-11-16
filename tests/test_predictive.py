@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from markowitz import markowitz_unconstrained
-from predictive import (
+from possibilistic_portfolio.markowitz import markowitz_unconstrained
+from possibilistic_portfolio.predictive import (
     check_aligned,
     load_predictive,
     make_predictive,
@@ -45,6 +45,7 @@ def test_save_load_round_trip_keeps_index(tmp_path, index):
     pred = _pred(index)
     save_predictive(tmp_path, "algo", pred)
     back = load_predictive(tmp_path, "algo")
+    assert back is not None
     assert back["index"].equals(index)
     np.testing.assert_array_equal(back["mu_hat"], pred["mu_hat"])
     np.testing.assert_array_equal(back["sigma_hat"], pred["sigma_hat"])
@@ -54,6 +55,7 @@ def test_load_falls_back_to_old_npy_files_and_none(tmp_path):
     np.save(tmp_path / "old_mus.npy", np.zeros((4, 2)))
     np.save(tmp_path / "old_sigmas.npy", np.zeros((4, 2, 2)))
     old = load_predictive(tmp_path, "old")
+    assert old is not None
     assert set(old) == {"mu_hat", "sigma_hat"}  # no index saved back then
     assert load_predictive(tmp_path, "weights_only") is None
 

@@ -42,7 +42,7 @@ import pandas as pd
 from numpy.linalg import slogdet
 from scipy.special import multigammaln
 
-from config import (
+from possibilistic_portfolio.config import (
     BAYESIAN_MAX_MODELS,
     BAYESIAN_PRUNE_THRESHOLD,
     BURN_IN,
@@ -51,9 +51,12 @@ from config import (
     RF_PATH,
     THETA,
 )
-from data_input import load_excess_returns, prepare_returns
-from markowitz import markowitz_unconstrained
-from predictive import make_predictive
+from possibilistic_portfolio.data_input import (
+    load_excess_returns,
+    prepare_returns,
+)
+from possibilistic_portfolio.markowitz import markowitz_unconstrained
+from possibilistic_portfolio.predictive import make_predictive
 
 
 def sharing_prior_update(
@@ -276,7 +279,7 @@ def _ba_moments(
 ) -> tuple[np.ndarray, np.ndarray]:
     """formulae from section 3.1"""
 
-    mu_hat = sum(probs[m] * mus[m] for m in range(len(mus)))
+    mu_hat = sum((probs[m] * mus[m] for m in range(len(mus))), np.zeros(n))
     Sigma_hat = np.zeros((n, n))
     for m in range(len(mus)):
         Sigma_m = _sigma_m(Lambdas[m], nus[m], n)

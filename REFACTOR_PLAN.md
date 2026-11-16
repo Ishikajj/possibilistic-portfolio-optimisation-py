@@ -10,7 +10,9 @@ Nothing gets changed without a yes.
 
 1. Known errors fixed: benchmark timing t-1 → t (test_timing xfails removed),
    "historical" truly expanding, possibilistic start row (2.9), P4 decided.
-2. Every remaining Part 2 section done to its agreed points (2.5–2.11).
+2. Part 1 (package move) done — added 2026-11-16: it was the original reason
+   for the refactor (0.3: tests first, then the move). Done 2026-11-16.
+   Every remaining Part 2 section done to its agreed points (2.5–2.11).
    Nothing new is added unless it's a bug.
 3. Dead code decided: necessity + `necessity_archive/`. Direction (user, 2026-11-16): plain possibility weighting becomes the default, but the necessity schemes stay **available as an option** — off by default, not deleted, and the code shouldn't change so much that switching necessity back on becomes hard.
 4. `TOOLING_TODO.md` has nothing open under Primary; the rest is marked "after
@@ -57,49 +59,47 @@ Anything not on this list goes to `TOOLING_TODO.md` as "after the paper".
 
 ---
 
-## Part 1 — Package move (mechanical, no behaviour change)
+## Part 1 — Package move (mechanical, no behaviour change) — [x] done 2026-11-16
+
+Verified: 271 tests pass (+3 xfail), pipeline snapshot `reference_no_necessity.npz` and the 6 simulated datasets bit for bit, real-necessity baseline (`tests/snapshots/necessity_baseline.py`, made before the move at `516b013`) bit for bit after it, every module imports on its own, entry-point paths resolve correctly from an unrelated working directory, ruff clean.
 
 ### 1.1 `pyproject.toml`
-- [ ] Add `[build-system]` with `uv_build` backend.
-- [ ] Add `[tool.uv.build-backend] module-name = "possibilistic_portfolio"` (project name `possibilistic-portfolio-optimisation-py` would otherwise map to a different module name).
-- [ ] `[tool.pytest.ini_options]`: remove `pythonpath = ["src"]` (package is installed into the venv instead); fix the odd indentation.
-- [ ] `requires-python = ">=3.11,<3.14"` vs `.python-version` 3.13 and ruff `target-version = "py311"` — keep as is?
+- [x] `[build-system]` with the `uv_build` backend (`uv_build>=0.13.7,<0.14`).
+- [x] `[tool.uv.build-backend] module-name = "possibilistic_portfolio"` (project name `possibilistic-portfolio-optimisation-py` would otherwise map to a different module name). `uv sync` installs the package editable.
+- [x] `[tool.pytest.ini_options]`: `pythonpath = ["src"]` removed (tests import the installed package); indentation fixed.
+- [x] `requires-python = ">=3.11,<3.14"` vs `.python-version` 3.13 and ruff `target-version = "py311"` — kept as is (decided 2026-11-16).
 
 ### 1.2 New files
-- [ ] `src/possibilistic_portfolio/__init__.py` (empty).
-- [ ] `src/possibilistic_portfolio/config.py` — see 0.4. All paths, `RESULTS_DIR`, `START_DATE`, markers and run parameters.
+- [x] `src/possibilistic_portfolio/__init__.py` (docstring only).
+- [x] `config.py` (moved, not new): `ROOT` now `parents[2]`; new `RESULTS_DIR`, `FIGURES_DIR`, `FRENCH_PORTFOLIO_FILES`. Every path in the code is built from config (no `../`, no `__file__` outside config). Per-run results folders / refusing to overwrite (0.4) and `START_DATE` / run settings in `main()` stay with 2.10 (P2).
 
-### 1.3 Moves (`git mv`, keeps history)
-All of `src/*.py` + `src/necessity_alternative_methods/` → `src/possibilistic_portfolio/` (subject to 0.7, 0.8).
+### 1.3 Moves
+- [x] All `src/*.py` → `src/possibilistic_portfolio/` with plain `mv` (user runs the git commands; `git add -A` records them as renames, history via `git log --follow`). `faster_necessity.py` moved with the rest (necessity stays optional).
+- [x] `src/necessity_archive/` (unused older necessity approaches) → `archive/necessity_archive/`, outside the package; no hard-coded paths in it.
 
 ### 1.4 Per-file touch list (imports + paths)
-
-| File | `sys.path` hack | Bare imports to change | Hard-coded paths to replace |
-|---|---|---|---|
-| `pipeline_wrapper.py` | L28 | L26 `markowitz`, L31 `bayesian_averaging`, L32 `possibilistic_bayesian`, L33 `alternative_investment_rules`, L42 `data_input` | L548 `../datasets/simulated`; L601, L662 `parent.parent / "results"`; L607–617 ten `../datasets/*.csv`; L621 RF path |
-| `evaluation_pipeline.py` | L37 | L39 `distribution_evaluation_functions`, L44 `portfolio_evaluation_functions`, L385 `data_input` (inside `__main__`) | L387 results dir; L389 datasets dir |
-| `table1_summary_stats.py` | L26 | L27 `data_input`, L28 `simulated_datasets` | L41 `DATASETS_DIR`; L247 `SIM_DATA_DIR`; L459 `table1.tex` output into `src/` |
-| `data_input.py` | — | — | — (paths moved to `config.py` in 2.2) |
-| `bayesian_averaging.py` | — | L45 `data_input`, L49 `markowitz` | — |
-| `possibilistic_bayesian.py` | — | L30 `data_input`, L34 `faster_necessity`, L40 `markowitz` | — |
-| `alternative_investment_rules.py` | — | L28 `markowitz` | — |
-| `plot_weight_distributions.py` | — | — | L13 results dir; L14 PNG output into `src/` |
-| `markowitz.py`, `portfolio_evaluation_functions.py`, `distribution_evaluation_functions.py`, `simulated_datasets.py`, `faster_necessity.py` | — | — | — |
-| `tests/test_markowitz.py` | — | L6 `markowitz` | — |
+- [x] Absolute imports everywhere: `from possibilistic_portfolio import x` / `from possibilistic_portfolio.x import y` (package, tests, snapshot tooling).
+- [x] `sys.path.insert` hacks removed (`pipeline_wrapper`, `evaluation_pipeline`, `table1_summary_stats`).
+- [x] `pipeline_wrapper.main()`: dataset list = `DATASETS_DIR / f for f in FRENCH_PORTFOLIO_FILES`, `RF_PATH`, `RESULTS_DIR`. `main_simulated()`: file list from `simulated_datasets.sim_paths` / `DGPS` (30 lines → 1), `RESULTS_DIR`. Docstrings point to `simulated_datasets.generate_and_save_sim_datasets`.
+- [x] `evaluation_pipeline.__main__`: `RESULTS_DIR` from config.
+- [x] `table1_summary_stats`: writes `figures/table1.tex` (`FIGURES_DIR`); `plot_weight_distributions`: reads `RESULTS_DIR`, writes `figures/weight_distributions.png`.
+- [x] `data_input`: no paths left (moved to config in 2.2).
+- [x] Tests: `test_simulated_datasets` uses `config.SIM_DATA_DIR`; `make_snapshots.py` uses config paths and runs the installed package — its `--src` option is gone (after the move it would have silently tested the current code whatever folder was passed); references from older code need a checkout of that code.
 
 ### 1.5 Other places that mention the old layout
-- [ ] `README.md` L33, L41, L49 — `uv run src/...` → `uv run python -m possibilistic_portfolio.<module>`.
-- [ ] `CLAUDE.md` — layout tree + commands.
-- [ ] `.gitignore` — `src/tests/` path; `comparison_cpu_gpu.py` / `compute_longonly_weights.py` entries (depends on 0.7); add `scratch/` if used.
-- [ ] `src/tests/` (gitignored scratch notebooks + `testing_pipeline.py`) → `scratch/`.
-- [ ] `possibilistic_bayesian.py` L830 `test_run_core()` lives in the module — rename (e.g. `demo_run_core`) or move into `tests/`, so it isn't mistaken for a test.
+- [x] `README.md` — run commands `uv run python -m possibilistic_portfolio.<module>`, config explained, package note.
+- [x] `CLAUDE.md` — layout tree, commands, conventions (keyword-only algorithms, common evaluation window, necessity optional, Bayesian `theta`/`max_models`).
+- [x] `.gitignore` — `src/tests/` / one-off script entries already gone (0.6, 0.7); `*.npz` ignored everywhere (pipeline forecasts in `results/`, snapshot references).
+- [x] `src/tests/` — already removed in 0.6; no `scratch/` needed.
+- [x] `possibilistic_bayesian.test_run_core()` → `demo_run_core()`.
+- [x] New `tests/snapshots/necessity_baseline.py` (+ gitignored `.npz`): cheap real-necessity check (~5 min) for the move and future necessity work.
 
 ### 1.6 Verify
-- [ ] `uv sync` installs the package.
-- [ ] `uv run pytest` passes.
-- [ ] Every module imports: `uv run python -c "import possibilistic_portfolio.<m>"` for each.
-- [ ] `uv run ruff check .` no new errors.
-- [ ] Snapshot tests (0.5) still match.
+- [x] `uv sync` installs the package.
+- [x] `uv run pytest` passes (271 + 3 xfail).
+- [x] Every module imports: `uv run python -c "import possibilistic_portfolio.<m>"` for each.
+- [x] `uv run ruff check .` no errors.
+- [x] Snapshot tests (0.5) still match; necessity baseline matches.
 
 ---
 
@@ -215,7 +215,7 @@ Edge-case notes:
 - [ ] Jorion / Kan-Zhou skip a row silently (NaN weights) when q ≤ 0, ψ < 0, or the beta is non-finite — no count. Also `_minvar_mean_target` → NaN on a zero / non-finite denominator. → Report with counts per reason (Part 2 NaN rule).
 - [?] Kan-Zhou ε can be negative → v outside (0,1) (no check).
 - [?] Jorion / Kan-Zhou compute moments up to T-2; historical / rolling up to T-1 (last row has no use anyway).
-- [?] `_incomplete_beta_unregularized`: dead `if _betainc is not None` branch (TODO item), docstring typo "incomp2lete".
+- [x] `_incomplete_beta_unregularized`: dead `if _betainc is not None` branch (TODO item), docstring typo "incomp2lete". Done 2026-11-16 with the type-error cleanup (no result change).
 
 ### 2.6 `simulated_datasets.py` — [x] done 2026-11-16 (tests drafted 2026-11-13)
 Tests (`tests/test_simulated_datasets.py`, 24 passing): every DGP — shapes, column names, integer index, finite values, seed reproducibility; iid means ≈ B·μ̄ and RF moments; loadings 0.5…1.5; sudden break flips mean sign; covariance break raises vol; regime parameters that make Var(g) negative are rejected; stochastic vol varies; **snapshot: all 6 DGPs regenerate the on-disk `*_T10000_N10_seed42.csv` + RF files bit for bit**.
@@ -263,7 +263,7 @@ Edge-case notes:
 - [?] Hellinger returns 1.0 (max distance) on numerical failure, silently.
 - [?] `_prune_models` docstring mentions a threshold the function no longer has.
 - [ ] `except Exception: pass` around aggregation → report with counts (Part 2 NaN rule); `burn_obs = min(burn_in, T // 2)` (TODO item).
-- [ ] L830 `test_run_core` (needs real data, not a pytest test) → rename or delete in Part 1.
+- [x] (done in Part 1, 2026-11-16) L830 `test_run_core` (needs real data, not a pytest test) → renamed `demo_run_core`.
 
 ### 2.10 `pipeline_wrapper.py` — [x] tests drafted 2026-11-13
 Tests (`tests/test_pipeline_wrapper.py`, 9 passing; the per-dataset run is stubbed for loop tests): real-data loop runs VW then EW per file with names `<stem>_value_weighted` / `_equal_weighted`, excess returns + `Mkt-RF` reach the run, parameters are passed through, extra tables ignored (`6_Portfolios_size_btm` case), unreadable file skipped with a warning, start/end date window; simulated loop runs each DGP on `Asset*` columns and copies `rf.csv`, skips missing files with a warning; `_save_algo_outputs` file names; **per-dataset run writes exactly the expected file set** (with and without `Mkt-RF`; necessity bypassed) and `returns.csv` round-trips.
@@ -275,7 +275,7 @@ Numbers are covered by `tests/test_snapshots.py`.
 ~~Bug: file without markers silently loads as empty data and gets run~~ — fixed in 2.2 (2026-11-15), xfail removed. Existing: `device="cuda"` in both `main()`s; real-data runs don't save `rf.csv`.
 
 Edge-case notes:
-- [?] `sys.path.insert` at import time (goes away with the package move).
+- [x] (done in Part 1, 2026-11-16) `sys.path.insert` at import time (goes away with the package move).
 - [?] Real-data loop catches every loading exception and prints a warning → a typo in a path just skips that dataset.
 
 ### 2.11 `evaluation_pipeline.py` — [x] done 2026-11-16 (tests drafted 2026-11-13)

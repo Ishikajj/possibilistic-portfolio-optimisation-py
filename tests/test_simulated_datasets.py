@@ -1,14 +1,13 @@
 """Tests for simulated_datasets.py — synthetic single-factor DGPs."""
 
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import pytest
 
-import simulated_datasets as sd
+from possibilistic_portfolio import simulated_datasets as sd
+from possibilistic_portfolio.config import SIM_DATA_DIR
 
-SIM_DIR = Path(__file__).resolve().parents[2] / "datasets" / "simulated"
+SIM_DIR = SIM_DATA_DIR
 
 DGPS = sd.DGPS
 
@@ -21,7 +20,7 @@ def test_registry_lists_the_six_saved_dgps():
 def test_defaults_come_from_config(name):
     import inspect
 
-    from config import SIM_N_ASSETS, SIM_SEED, SIM_T
+    from possibilistic_portfolio.config import SIM_N_ASSETS, SIM_SEED, SIM_T
 
     params = inspect.signature(DGPS[name]).parameters
     assert params["T"].default == SIM_T

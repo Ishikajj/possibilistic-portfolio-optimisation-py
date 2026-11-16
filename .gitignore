@@ -20,6 +20,8 @@ build/
 #working files
 *.csv
 *.npy
+# pipeline forecasts (<algo>_predictive.npz), snapshot references
+*.npz
 *.pkl
 CLAUDE.md
 
@@ -29,5 +31,6 @@ CLAUDE.md
 
 # regenerable outputs (plots, LaTeX tables)
 figures/
-# snapshot references (regenerate from `dev` via tests/snapshots/make_snapshots.py; ~1 min bypassed, ~80 min real necessity)
-tests/snapshots/*.npz
+# snapshot references (tests/snapshots/*.npz, covered by *.npz above): regenerate with
+# tests/snapshots/make_snapshots.py (~30 s bypassed, ~80 min real necessity)
+# and tests/snapshots/necessity_baseline.py (~5 min)

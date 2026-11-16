@@ -5,10 +5,10 @@ import inspect
 
 import pytest
 
-import alternative_investment_rules as air
-import bayesian_averaging as ba
-import config
-import possibilistic_bayesian as pb
+from possibilistic_portfolio import alternative_investment_rules as air
+from possibilistic_portfolio import bayesian_averaging as ba
+from possibilistic_portfolio import config
+from possibilistic_portfolio import possibilistic_bayesian as pb
 
 ALGORITHMS = [
     air.equal_weight_strategy,
@@ -66,7 +66,7 @@ def test_method_specific_defaults_come_from_config():
 
 
 def test_start_is_burn_in_plus_periods_until_investment_in_the_pipeline():
-    import pipeline_wrapper as pw
+    from possibilistic_portfolio import pipeline_wrapper as pw
 
     for fn in (
         pw.calculate_all_functions_perdatasets,

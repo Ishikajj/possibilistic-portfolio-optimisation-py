@@ -24,7 +24,6 @@ Entry point: ``run_evaluation(folder, rf_series=load_rf(folder))``.
 
 from __future__ import annotations
 
-import sys
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -34,21 +33,19 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from config import RF_PATH, SCALING_FACTOR
-from data_input import load_risk_free
-from distribution_evaluation_functions import (
+from possibilistic_portfolio.config import RESULTS_DIR, RF_PATH, SCALING_FACTOR
+from possibilistic_portfolio.data_input import load_risk_free
+from possibilistic_portfolio.distribution_evaluation_functions import (
     mahalanobis_distance_series,
     multivariate_log_likelihood_series,
 )
-from portfolio_evaluation_functions import (
+from possibilistic_portfolio.portfolio_evaluation_functions import (
     average_turnover,
     calculate_sharpe_ratio,
     certainty_equivalent,
     rolling_sharpe_ratio,
 )
-from predictive import load_predictive
+from possibilistic_portfolio.predictive import load_predictive
 
 _ROLLING_WINDOW = 252
 
@@ -442,7 +439,6 @@ def run_evaluation(
 
 
 if __name__ == "__main__":
-    RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
     for folder in sorted(RESULTS_DIR.iterdir()):
         if folder.is_dir():
             run_evaluation(folder, rf_series=load_rf(folder))

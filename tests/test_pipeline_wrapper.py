@@ -11,10 +11,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import evaluation_pipeline as ev
-import pipeline_wrapper as pw
-import possibilistic_bayesian
-from predictive import load_predictive, make_predictive
+from possibilistic_portfolio import evaluation_pipeline as ev
+from possibilistic_portfolio import pipeline_wrapper as pw
+from possibilistic_portfolio import possibilistic_bayesian
+from possibilistic_portfolio.predictive import load_predictive, make_predictive
 
 VW = "Average Value Weighted Returns -- Daily"
 EW = "Average Equal Weighted Returns -- Daily"
@@ -186,6 +186,7 @@ def test_save_algo_outputs(tmp_path):
         "algo_weights.csv",
     ]
     back = load_predictive(tmp_path, "algo")
+    assert back is not None
     assert np.array_equal(back["sigma_hat"], ms["sigma_hat"])
     assert back["index"].equals(dates)  # forecast keeps its dates
 

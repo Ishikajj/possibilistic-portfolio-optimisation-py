@@ -30,15 +30,15 @@ Download the daily return files you want from the [Kenneth French Data Library](
 
 ### 3. Configure and run the pipeline
 
-Open `src/pipeline_wrapper.py` and edit the `main()` function at the bottom:
+Paths and default settings live in `src/possibilistic_portfolio/config.py`:
 
-- Point `portfolios_paths` to the CSV files you downloaded.
-- Set `output_dir` to wherever you want results saved.
+- `FRENCH_PORTFOLIO_FILES` lists the Kenneth French CSV files to run (looked up in `DATASETS_DIR`).
+- `RESULTS_DIR` is where results are saved (default `results/`).
 
-Then run:
+Run settings (burn-in, windows, model-pool sizes, ...) are in `main()` at the bottom of `src/possibilistic_portfolio/pipeline_wrapper.py`. Then run:
 
 ```bash
-uv run src/pipeline_wrapper.py
+uv run python -m possibilistic_portfolio.pipeline_wrapper
 ```
 
 This produces one output folder per dataset (e.g. `results/10_Industry_Portfolios_Daily_value_weighted/`) containing portfolio weights, predictive moments, and a copy of the returns series.
@@ -46,7 +46,7 @@ This produces one output folder per dataset (e.g. `results/10_Industry_Portfolio
 ### 4. Evaluate
 
 ```bash
-uv run src/evaluation_pipeline.py
+uv run python -m possibilistic_portfolio.evaluation_pipeline
 ```
 
 This reads every output folder, computes Sharpe ratios, certainty equivalents, log-likelihoods, and Mahalanobis distances, and writes summary CSVs back into each folder.
@@ -91,4 +91,5 @@ Open `analysis.ipynb` and point `RESULTS_DIR` to your results folder. Run top to
 
 - A full possibilistic run over ~12 000 trading days takes roughly 90 minutes per dataset. The main controls are `max_models` (pruning) and `merge_threshold` / `nu_bandwidth` (merging).
 - `pipeline_wrapper.py` and `evaluation_pipeline.py` are designed to be run in sequence; the evaluation step expects the folder structure that the pipeline step produces.
--Import paths assume you run scripts from the `dev/` root.
+- The code is an installable package (`src/possibilistic_portfolio/`, installed by `uv sync`). Import modules as `from possibilistic_portfolio import possibilistic_bayesian`; all paths come from `config.py`, so scripts work from any directory.
+- Tests: `uv run pytest`.

@@ -8,11 +8,11 @@ import pytest
 from scipy.spatial.distance import mahalanobis
 from scipy.stats import multivariate_normal
 
-from distribution_evaluation_functions import (
+from possibilistic_portfolio.distribution_evaluation_functions import (
     mahalanobis_distance_series,
     multivariate_log_likelihood_series,
 )
-from predictive import make_predictive
+from possibilistic_portfolio.predictive import make_predictive
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ def test_unusable_sigma_rows_are_counted_in_one_warning(setup):
         ll = multivariate_log_likelihood_series(returns, bad)
     assert len(rec) == 1
     assert "Sigma singular or det < 0: 2" in str(rec[0].message)
-    assert ll.iloc[[11, 12]].isna().all()  # moments at t-1 score row t
+    assert ll.iloc[11:13].isna().all()  # moments at t-1 score row t
 
 
 def test_clean_scoring_does_not_warn(setup):

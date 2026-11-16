@@ -1,14 +1,33 @@
-"""Project-wide paths and constants. Import from scripts, notebooks and tests.
+"""Project-wide paths and constants. Import from scripts, notebooks and tests:
+``from possibilistic_portfolio import config``.
 
-Dataset paths, simulated-data settings, algorithm defaults and the evaluation
-scaling. The results folder and run lists move in with the pipeline (2.10).
+Every path in the code is built from the constants here (no relative paths,
+so scripts work from any working directory), plus simulated-data settings,
+algorithm defaults and the evaluation scaling.
 """
 
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]  # dev/
-DATASETS_DIR = ROOT.parent / "datasets"
+# ── Paths ──────────────────────────────────────────────────────────────────
+ROOT = Path(__file__).resolve().parents[2]  # dev/ (this file: dev/src/<pkg>/)
+DATASETS_DIR = ROOT.parent / "datasets"  # sibling of dev/, not in the repo
 RF_PATH = DATASETS_DIR / "F-F_Research_Data_Factors_daily.csv"
+RESULTS_DIR = ROOT / "results"  # default pipeline output (one folder/dataset)
+FIGURES_DIR = ROOT / "figures"  # regenerable plots / LaTeX tables (gitignored)
+
+# Kenneth French portfolio files run by pipeline_wrapper.main (in DATASETS_DIR)
+FRENCH_PORTFOLIO_FILES = [
+    "6_Portfolios_size_momentum.csv",
+    "10_Portfolios_ltr.csv",
+    "6_Portfolios_size_str.csv",
+    "10_Portfolios_Prior_momentum.csv",
+    "10_Portfolios_Prior_str.csv",
+    "10_Industry_Portfolios_Daily.csv",
+    "10_Portfolios_Formed_on_booktomarket.csv",
+    "10_Portfolios_Formed_on_ME_size.csv",
+    "6_Portfolios_size_ltr.csv",
+    "6_Portfolios_size_btm.csv",
+]
 
 # Simulated datasets (simulated_datasets, table1_summary_stats, pipeline):
 # default size and seed of every DGP and of the saved CSVs.

@@ -5,18 +5,20 @@ replaced by all ones in every run_core test: masked / power / exp then all
 reduce to plain possibility weighting.
 """
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
 
-import bayesian_averaging as ba
-import possibilistic_bayesian as pb
-from markowitz import markowitz_step
+from possibilistic_portfolio import bayesian_averaging as ba
+from possibilistic_portfolio import possibilistic_bayesian as pb
+from possibilistic_portfolio.markowitz import markowitz_step
 
 N = 3
 
 
-def _niw(seed: int = 0):
+def _niw(seed: int = 0) -> tuple[np.ndarray, float, np.ndarray, float]:
     rng = np.random.default_rng(seed)
     A = rng.normal(size=(N, N))
     return (
@@ -24,6 +26,19 @@ def _niw(seed: int = 0):
         2.0,
         A @ A.T * 1e-3 + 1e-3 * np.eye(N),
         N + 4.0,
+    )
+
+
+def _niw_pool(
+    *seeds: int,
+) -> tuple[list[np.ndarray], list[float], list[np.ndarray], list[float]]:
+    """Parallel lists (mus, kappas, Lambdas, nus) of the _niw(seed) models."""
+    models = [_niw(s) for s in seeds]
+    return (
+        [m[0] for m in models],
+        [m[1] for m in models],
+        [m[2] for m in models],
+        [m[3] for m in models],
     )
 
 
@@ -40,7 +55,7 @@ def returns() -> pd.DataFrame:
     return pd.DataFrame(rng.normal(0.0005, 0.01, (150, N)), columns=list("abc"))
 
 
-RUN = dict(burn_in=40, start=60, max_models=15, n_jobs=1)
+RUN: dict[str, Any] = dict(burn_in=40, start=60, max_models=15, n_jobs=1)
 
 
 # --- newborn model ---------------------------------------------------------
@@ -113,7 +128,7 @@ def test_log_score_matches_docstring_formula():
 
 def test_update_possibilities_is_sup_normalised_bayes():
     models = [_niw(s) for s in range(3)]
-    mus, kappas, Lams, nus = map(list, zip(*models, strict=True))
+    mus, kappas, Lams, nus = _niw_pool(*range(3))
     prior = np.array([0.2, 1.0, 0.5])
     x = np.array([0.01, -0.02, 0.005])
     lik = np.exp([pb._log_marginal_likelihood(x, *m) for m in models])
@@ -124,7 +139,7 @@ def test_update_possibilities_is_sup_normalised_bayes():
 
 
 def test_update_possibilities_all_invalid_gives_ones():
-    mus, kappas, _, nus = map(list, zip(_niw(0), _niw(1), strict=True))
+    mus, kappas, _, nus = _niw_pool(0, 1)
     bad = [-np.eye(N), -np.eye(N)]
     out = pb._update_possibilities(
         np.zeros(N), mus, kappas, bad, nus, np.ones(2)
@@ -287,8 +302,7 @@ def test_aggregate_single_model_is_its_mode():
 
 
 def test_aggregate_is_invariant_to_scaling_weights():
-    models = [_niw(s) for s in range(3)]
-    mus, kappas, Lams, nus = map(list, zip(*models, strict=True))
+    mus, kappas, Lams, nus = _niw_pool(*range(3))
     a = pb._aggregate_possibilistic_niw(
         mus, kappas, Lams, nus, np.array([1, 0.5, 0.2]), N
     )
@@ -299,8 +313,7 @@ def test_aggregate_is_invariant_to_scaling_weights():
 
 
 def test_aggregate_mean_is_kappa_weighted():
-    models = [_niw(s) for s in range(2)]
-    mus, kappas, Lams, nus = map(list, zip(*models, strict=True))
+    mus, kappas, Lams, nus = _niw_pool(*range(2))
     kappas = [1.0, 3.0]
     w = np.array([0.5, 0.5])
     mu_hat, _ = pb._aggregate_possibilistic_niw(mus, kappas, Lams, nus, w, N)

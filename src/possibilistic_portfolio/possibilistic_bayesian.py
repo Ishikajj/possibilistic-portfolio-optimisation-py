@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 from numpy.linalg import slogdet
 
-from config import (
+from possibilistic_portfolio.config import (
     BURN_IN,
     DATASETS_DIR,
     K_NEIGHBOURS,
@@ -42,15 +42,18 @@ from config import (
     RF_PATH,
     THETA,
 )
-from data_input import load_excess_returns, prepare_returns
-from faster_necessity import (
+from possibilistic_portfolio.data_input import (
+    load_excess_returns,
+    prepare_returns,
+)
+from possibilistic_portfolio.faster_necessity import (
     deterministic_mask_weighting,
     exponential_penalty_weighting,
     necessity_scores_fast,
     power_weighting,
 )
-from markowitz import markowitz_unconstrained
-from predictive import make_predictive
+from possibilistic_portfolio.markowitz import markowitz_unconstrained
+from possibilistic_portfolio.predictive import make_predictive
 
 
 def _new_model_prior(
@@ -839,7 +842,7 @@ def run_core(
     )
 
 
-def test_run_core() -> tuple[pd.DataFrame, tuple]:
+def demo_run_core() -> tuple[pd.DataFrame, tuple]:
     """Run a minimal smoke test of run_core on a short return sample."""
     df = prepare_returns(
         load_excess_returns(
@@ -866,13 +869,13 @@ def test_run_core() -> tuple[pd.DataFrame, tuple]:
     diag_df = results[0]
     if diag_df.empty:
         raise RuntimeError(
-            "smoke_test_run_core produced an empty diagnostic DataFrame."
+            "demo_run_core produced an empty diagnostic DataFrame."
         )
 
-    print("test_run_core passed")
+    print("demo_run_core passed")
     print(diag_df.tail())
     return diag_df, results
 
 
 if __name__ == "__main__":
-    test_run_core()
+    demo_run_core()

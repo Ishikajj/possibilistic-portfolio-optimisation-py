@@ -5,13 +5,13 @@ import pandas as pd
 import pytest
 from scipy.stats import multivariate_t
 
-import bayesian_averaging as ba
-from markowitz import markowitz_step
+from possibilistic_portfolio import bayesian_averaging as ba
+from possibilistic_portfolio.markowitz import markowitz_step
 
 N = 3
 
 
-def _niw(seed: int = 0):
+def _niw(seed: int = 0) -> tuple[np.ndarray, float, np.ndarray, float]:
     rng = np.random.default_rng(seed)
     A = rng.normal(size=(N, N))
     return (
@@ -19,6 +19,19 @@ def _niw(seed: int = 0):
         2.0,
         A @ A.T * 1e-3 + 1e-3 * np.eye(N),
         N + 4.0,
+    )
+
+
+def _niw_pool(
+    *seeds: int,
+) -> tuple[list[np.ndarray], list[float], list[np.ndarray], list[float]]:
+    """Parallel lists (mus, kappas, Lambdas, nus) of the _niw(seed) models."""
+    models = [_niw(s) for s in seeds]
+    return (
+        [m[0] for m in models],
+        [m[1] for m in models],
+        [m[2] for m in models],
+        [m[3] for m in models],
     )
 
 
@@ -89,7 +102,7 @@ def test_niw_update_is_conjugate_posterior():
 
 
 def test_update_all_models_updates_in_place():
-    mus, kappas, Lams, nus = map(list, zip(_niw(1), _niw(2), strict=True))
+    mus, kappas, Lams, nus = _niw_pool(1, 2)
     x = np.full(N, 0.01)
     expected = [
         ba._update_niw(x, mus[m], kappas[m], Lams[m], nus[m]) for m in range(2)
@@ -128,7 +141,7 @@ def test_sharing_prior_sums_to_one_and_respects_alpha():
 
 def test_update_probs_is_bayes_rule():
     models = [_niw(s) for s in range(3)]
-    mus, kappas, Lams, nus = map(list, zip(*models, strict=True))
+    mus, kappas, Lams, nus = _niw_pool(*range(3))
     prior = np.array([0.2, 0.3, 0.5])
     x = np.array([0.01, -0.02, 0.005])
     lik = np.exp([ba._log_marginal_likelihood(x, *m) for m in models])
@@ -139,7 +152,7 @@ def test_update_probs_is_bayes_rule():
 
 
 def test_update_probs_survives_extreme_likelihoods():
-    mus, kappas, Lams, nus = map(list, zip(_niw(0), _niw(1), strict=True))
+    mus, kappas, Lams, nus = _niw_pool(0, 1)
     out = ba._update_probs(
         np.full(N, 50.0), mus, kappas, Lams, nus, np.array([0.5, 0.5])
     )
@@ -150,8 +163,7 @@ def test_update_probs_survives_extreme_likelihoods():
 
 
 def test_ba_moments_are_mixture_moments():
-    models = [_niw(s) for s in range(2)]
-    mus, kappas, Lams, nus = map(list, zip(*models, strict=True))
+    mus, kappas, Lams, nus = _niw_pool(*range(2))
     p = np.array([0.3, 0.7])
     mu_hat, S_hat = ba._ba_moments(mus, kappas, Lams, nus, p, N)
     covs = [

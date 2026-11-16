@@ -20,7 +20,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from predictive import check_aligned
+from possibilistic_portfolio.predictive import check_aligned
 
 
 def _gaussian_terms(

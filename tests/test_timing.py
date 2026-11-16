@@ -24,11 +24,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import alternative_investment_rules as air
-import bayesian_averaging as ba
-import evaluation_pipeline as ev
-import pipeline_wrapper as pw
-import possibilistic_bayesian as pb
+from possibilistic_portfolio import alternative_investment_rules as air
+from possibilistic_portfolio import bayesian_averaging as ba
+from possibilistic_portfolio import evaluation_pipeline as ev
+from possibilistic_portfolio import pipeline_wrapper as pw
+from possibilistic_portfolio import possibilistic_bayesian as pb
 
 T, N = 150, 3
 BURN, START, WIN = 40, 60, 30

@@ -6,9 +6,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import simulated_datasets as sd
-import table1_summary_stats as t1
-from data_input import TABLE_TITLES
+from possibilistic_portfolio import simulated_datasets as sd
+from possibilistic_portfolio import table1_summary_stats as t1
+from possibilistic_portfolio.data_input import TABLE_TITLES
 
 VW, EW = TABLE_TITLES["value"], TABLE_TITLES["equal"]
 

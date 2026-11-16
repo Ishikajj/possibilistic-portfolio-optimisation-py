@@ -9,11 +9,16 @@ Necessity runs for real on CPU (joblib, seeded per time step). Pass
 --bypass-necessity to replace it by all ones instead: masked / power / exp then
 equal plain possibility weighting, and faster_necessity.py is never run.
 
+Runs the installed package (possibilistic_portfolio, `uv sync`), i.e. the
+current code. References from older code have to be made on a checkout of
+that code (the FYP code on `dev` has the flat src/ layout, before the
+package move; this script then needs its pre-move version).
+
 Usage (from dev/):
-  # make reference from another checkout's src (e.g. the FYP code on `dev`)
-  uv run python tests/snapshots/make_snapshots.py --src <checkout>/src --out tests/snapshots/reference.npz
+  # make a reference from the current code
+  uv run python tests/snapshots/make_snapshots.py --out tests/snapshots/reference.npz
   # check the current code against it
-  uv run python tests/snapshots/make_snapshots.py --src src --compare tests/snapshots/reference.npz
+  uv run python tests/snapshots/make_snapshots.py --compare tests/snapshots/reference.npz
 """
 
 from __future__ import annotations
@@ -23,15 +28,16 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
-DATASETS_DIR = Path(__file__).resolve().parents[3] / "datasets"
+from possibilistic_portfolio.config import DATASETS_DIR, RF_PATH, SIM_DATA_DIR
 
 T = 1400  # rows per slice
 N_ASSETS = 3  # portfolios / assets kept (+ Mkt-RF for the real slice)
-PARAMS = dict(
+PARAMS: dict[str, Any] = dict(
     burn_in=300,
     periods_until_investment=100,  # first weights at row 400 -> ~1000 invested days
     theta=1.0,
@@ -46,8 +52,6 @@ PARAMS = dict(
     device="cpu",
 )
 START_DATE = "1980-01-01"
-VW = "Average Value Weighted Returns -- Daily"
-EW = "Average Equal Weighted Returns -- Daily"
 
 
 def _bypass_necessity(possibilistic_bayesian) -> None:
@@ -66,14 +70,15 @@ def _frame_to_arrays(prefix: str, df: pd.DataFrame, out: dict) -> None:
     out[prefix + "__cols"] = np.array([str(c) for c in df.columns])
 
 
-def build(src: Path, bypass_necessity: bool = False) -> dict[str, np.ndarray]:
+def build(bypass_necessity: bool = False) -> dict[str, np.ndarray]:
     """Load the data, run the full pipeline + evaluation on the `real` and
     `sim` slices, and collect every output into one dict of arrays."""
-    sys.path.insert(0, str(src.resolve()))
-    import data_input
-    import evaluation_pipeline
-    import pipeline_wrapper
-    import possibilistic_bayesian
+    from possibilistic_portfolio import (
+        data_input,
+        evaluation_pipeline,
+        pipeline_wrapper,
+        possibilistic_bayesian,
+    )
 
     if bypass_necessity:
         _bypass_necessity(possibilistic_bayesian)
@@ -81,39 +86,20 @@ def build(src: Path, bypass_necessity: bool = False) -> dict[str, np.ndarray]:
 
     # --- data_input, end to end on one real file (both blocks) -------------
     industry = DATASETS_DIR / "10_Industry_Portfolios_Daily.csv"
-    rf_path = DATASETS_DIR / "F-F_Research_Data_Factors_daily.csv"
-    new_api = hasattr(data_input, "load_excess_returns")  # False on FYP `dev`
     loaded = {}
-    for name, weighting, start, end in [
-        ("vw", "value", VW, EW),
-        ("ew", "equal", EW, None),
-    ]:
-        if new_api:
-            excess = data_input.load_excess_returns(
-                industry, rf_path, weighting, start_date=START_DATE
-            )
-        else:
-            excess = data_input.load_excess_returns_from_kenneth_french_path(
-                portfolios_path=industry,
-                risk_free_path=rf_path,
-                start_date=START_DATE,
-                start_marker=start,
-                end_marker=end,
-            )
+    for name, weighting in [("vw", "value"), ("ew", "equal")]:
+        excess = data_input.load_excess_returns(
+            industry, RF_PATH, weighting, start_date=START_DATE
+        )
         out[f"data_input__{name}__dates"] = (
             excess["Date"].dt.strftime("%Y%m%d").astype(int).to_numpy()
         )
         prepared = data_input.prepare_returns(excess)
         _frame_to_arrays(f"data_input__{name}", prepared, out)
         loaded[name] = prepared
-    if new_api:  # Date-indexed, like the returns (matched by date in CEQ)
-        rf_df = data_input.load_risk_free(rf_path, START_DATE)
-        global_rf = rf_df.set_index("Date")["RF"]
-    else:
-        rf_df = data_input.load_risk_free_rate(rf_path)
-        global_rf = data_input.slice_timeframe(rf_df, START_DATE, None)[
-            "RF"
-        ].reset_index(drop=True)
+    # Date-indexed, like the returns (matched by date in CEQ)
+    rf_df = data_input.load_risk_free(RF_PATH, START_DATE)
+    global_rf = rf_df.set_index("Date")["RF"]
     out["data_input__rf"] = global_rf.to_numpy(dtype=float)
 
     # --- the two pipeline slices --------------------------------------------
@@ -121,7 +107,7 @@ def build(src: Path, bypass_necessity: bool = False) -> dict[str, np.ndarray]:
     real = real[list(real.columns[:N_ASSETS]) + ["Mkt-RF"]]
     real_rf = global_rf.iloc[:T]  # same rows as `real` (both from START_DATE)
 
-    sim_dir = DATASETS_DIR / "simulated"
+    sim_dir = SIM_DATA_DIR
     sim = pd.read_csv(sim_dir / "iid_T10000_N10_seed42.csv").iloc[:T, :N_ASSETS]
     sim_rf = pd.read_csv(sim_dir / "rf_iid_T10000_N10_seed42.csv")["RF"].iloc[
         :T
@@ -182,14 +168,13 @@ def compare(new: dict, ref_path: Path) -> bool:
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--src", type=Path, required=True)
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--out", type=Path)
     g.add_argument("--compare", type=Path)
     p.add_argument("--bypass-necessity", action="store_true")
     args = p.parse_args()
 
-    result = build(args.src, bypass_necessity=args.bypass_necessity)
+    result = build(bypass_necessity=args.bypass_necessity)
     if args.out:
         np.savez_compressed(args.out, **result)
         print(f"saved {len(result)} arrays to {args.out}")
