@@ -28,6 +28,35 @@ def returns() -> pd.DataFrame:
     return pd.DataFrame(rng.normal(0.0005, 0.01, (160, N)), columns=list("abc"))
 
 
+# --- newborn model ---------------------------------------------------------
+
+
+def test_new_model_prior_is_pooled_sample_mean_and_variance():
+    rng = np.random.default_rng(1)
+    R = rng.normal(0.001, 0.01, (50, N))
+    mu_bar, lam_bar = ba._new_model_prior(R.sum(0), (R**2).sum(0), t=50)
+    assert np.isclose(mu_bar, R.mean(0).mean())
+    assert np.isclose(lam_bar, R.var(0, ddof=1).mean())
+
+
+def test_run_core_prior_at_t_sees_the_t_returns_before_t(monkeypatch, returns):
+    """At step t, sum_R / sum_R2 hold rows 0 … t-1 (t returns, not R[t])."""
+    calls = []
+    real = ba._new_model_prior
+
+    def spy(sum_R, sum_R2, t):
+        calls.append((sum_R.copy(), sum_R2.copy(), t))
+        return real(sum_R, sum_R2, t)
+
+    monkeypatch.setattr(ba, "_new_model_prior", spy)
+    ba.run_core(returns, burn_in=40)
+    R = returns.to_numpy()
+    assert [t for *_, t in calls] == list(range(40, len(R)))
+    for sum_R, sum_R2, t in calls:
+        assert np.allclose(sum_R, R[:t].sum(0))
+        assert np.allclose(sum_R2, (R[:t] ** 2).sum(0))
+
+
 # --- NIW building blocks --------------------------------------------------
 
 

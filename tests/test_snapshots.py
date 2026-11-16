@@ -21,6 +21,8 @@ Deliberate differences from the FYP code (reference regenerated from post-fyp):
 - 2026-11-16 possibilistic weights start at `start`, not `burn_in` (forecasts
   unchanged). Only possibilistic unconstrained weights and their Sharpe, CEQ,
   turnover, rolling Sharpe changed. reference.npz still pre-fix.
+- 2026-11-16 Bayesian newborn prior divides by t / t-1 (was t-1 / t-2; P4).
+  Only bayesian_averaging (+ long-only) changed, slightly.
 
 When a result-changing fix lands on purpose, check that only the expected keys
 differ (run make_snapshots.py --compare), then regenerate the reference from the

@@ -42,26 +42,27 @@ from predictive import make_predictive
 def _new_model_prior(
     sum_R: np.ndarray, sum_R2: np.ndarray, t: int
 ) -> tuple[float, float]:
-    """Compute the scalar prior hyperparameters for the newborn model at time t.
+    """Scalar prior hyperparameters for the model born at step t.
 
-    The newborn model uses a common prior across assets:
-    - mean = average across assets of historical sample means
-    - covariance scale = average across assets of historical sample variances
+    The paper's common prior across assets, from the t returns seen so far
+    (rows 0 … t-1; sum_R / sum_R2 don't include R[t] yet):
+    - mean = average across assets of the per-asset sample means
+    - covariance scale = average across assets of the per-asset sample
+      variances (ddof=1)
 
-    Returns
-    -------
-    (mu_bar, lambda_bar)
-        Scalar common mean and scalar common variance proxy.
+    Returns (mu_bar, lambda_bar). Same as bayesian_averaging._new_model_prior.
     """
     if t <= 0:
         return 0.0, 1e-4
 
-    mu_vec = sum_R / float(t)
+    mu_vec = sum_R / float(t)  # (n,) per-asset sample means
     mu_bar = float(mu_vec.mean())
 
     if t <= 1:
+        # Cannot compute sample variance with < 2 observations.
         return mu_bar, 1e-4
 
+    # Per-asset sample variance: Var(R_i) = (sum R_i^2 - t * mean_i^2) / (t-1)
     var_vec = (sum_R2 - t * mu_vec**2) / float(t - 1)
     var_vec = np.maximum(var_vec, 1e-8)
     return mu_bar, float(var_vec.mean())

@@ -54,6 +54,34 @@ def test_new_model_prior_is_pooled_sample_mean_and_variance():
     assert np.isclose(lam_bar, R.var(0, ddof=1).mean())
 
 
+def test_new_model_prior_same_as_bayesian():
+    rng = np.random.default_rng(2)
+    R = rng.normal(0.001, 0.01, (30, N))
+    for t in (0, 1, 2, 30):
+        args = (R[:t].sum(0), (R[:t] ** 2).sum(0), t)
+        assert pb._new_model_prior(*args) == ba._new_model_prior(*args)
+
+
+def test_run_core_prior_at_t_sees_the_t_returns_before_t(
+    no_necessity, monkeypatch, returns
+):
+    """At step t, sum_R / sum_R2 hold rows 0 … t-1 (t returns, not R[t])."""
+    calls = []
+    real = pb._new_model_prior
+
+    def spy(sum_R, sum_R2, t):
+        calls.append((sum_R.copy(), sum_R2.copy(), t))
+        return real(sum_R, sum_R2, t)
+
+    monkeypatch.setattr(pb, "_new_model_prior", spy)
+    pb.run_core(returns, **RUN)
+    R = returns.to_numpy()
+    assert [t for *_, t in calls] == list(range(RUN["burn_in"], len(R)))
+    for sum_R, sum_R2, t in calls:
+        assert np.allclose(sum_R, R[:t].sum(0))
+        assert np.allclose(sum_R2, (R[:t] ** 2).sum(0))
+
+
 def test_append_new_model_has_full_possibility():
     mus, kappas, Lams, nus = [], [], [], []
     poss = pb._append_new_model(
