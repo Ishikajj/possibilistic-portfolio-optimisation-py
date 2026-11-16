@@ -37,16 +37,14 @@ def build() -> dict[str, np.ndarray]:
         )
     ).iloc[:T, :N_ASSETS]
     t0 = time.time()
-    diag, m, w_m, p, w_p, e, w_e = pb.run_core(
+    diag, outputs = pb.run_core(
         returns, start=60, burn_in=40, max_models=8, n_jobs=1, device="cpu"
     )
     print(f"run_core with real necessity: {time.time() - t0:.1f}s")
     out = {"returns": returns.to_numpy()}
-    for name, pred, w in [
-        ("masked", m, w_m),
-        ("power", p, w_p),
-        ("exp", e, w_e),
-    ]:
+    for name, o in outputs.items():  # masked, power, exp
+        pred, w = o.forecast, o.weights
+        assert pred is not None
         out[f"{name}_mu"] = pred["mu_hat"]
         out[f"{name}_sigma"] = pred["sigma_hat"]
         out[f"{name}_weights"] = w.to_numpy()

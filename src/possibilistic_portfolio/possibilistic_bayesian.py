@@ -17,8 +17,8 @@ Algorithm (per time step t):
 7. Prune     — keep top max_models by possibility
 8. Merge     — merge similar models by Hellinger distance to reduce redundancy
 
-Entry point: run_core(returns_df, ...) — returns (diag_df, masked_pred, masked_weights,
-power_pred, power_weights, exp_pred, exp_weights).
+Entry point: run_core(returns_df, ...) — returns (diag_df, outputs), outputs =
+{"masked" | "power" | "exp": StrategyOutput(weights, forecast)}, one per weighting scheme.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ from possibilistic_portfolio.faster_necessity import (
     power_weighting,
 )
 from possibilistic_portfolio.markowitz import markowitz_unconstrained
-from possibilistic_portfolio.predictive import make_predictive
+from possibilistic_portfolio.predictive import StrategyOutput, make_predictive
 
 
 def _new_model_prior(
@@ -644,15 +644,7 @@ def run_core(
     eta: float = NECESSITY_ETA,
     device: str = NECESSITY_DEVICE,
     n_jobs: int = NECESSITY_N_JOBS,
-) -> tuple[
-    pd.DataFrame,
-    dict[str, np.ndarray],
-    pd.DataFrame,
-    dict[str, np.ndarray],
-    pd.DataFrame,
-    dict[str, np.ndarray],
-    pd.DataFrame,
-]:
+) -> tuple[pd.DataFrame, dict[str, StrategyOutput]]:
     """Run the possibilistic NIW model averaging algorithm.
 
     Args:
@@ -672,14 +664,12 @@ def run_core(
         device: "cpu" or "cuda" for necessity score computation.
         n_jobs: parallel workers for necessity score computation.
 
-    Returns 7-tuple:
-        diag_df            — per-step diagnostics (model counts, necessity stats, Hellinger avg)
-        masked_predictive  — {"mu_hat": (T,n), "sigma_hat": (T,n,n)} under masked weighting
-        weights_masked     — (T, n) Markowitz weights from masked predictives
-        power_predictive   — {"mu_hat": (T,n), "sigma_hat": (T,n,n)} under power weighting
-        weights_power      — (T, n) Markowitz weights from power predictives
-        exp_predictive     — {"mu_hat": (T,n), "sigma_hat": (T,n,n)} under exponential weighting
-        weights_exp        — (T, n) Markowitz weights from exponential predictives
+    Returns (diag_df, outputs):
+        diag_df  — per-step diagnostics (model counts, necessity stats, Hellinger avg)
+        outputs  — weighting scheme -> StrategyOutput(weights, forecast):
+                   "masked", "power", "exp". forecast = {"mu_hat": (T,n),
+                   "sigma_hat": (T,n,n), "index"}; weights = (T, n) Markowitz
+                   weights from that forecast.
     """
     R_df = returns_df.copy()
     R = R_df.values.astype(float)
@@ -831,18 +821,14 @@ def run_core(
         exp_predictive, returns_df, start=start, theta=theta
     )
 
-    return (
-        diag_df,
-        masked_predictive,
-        weights_masked,
-        power_predictive,
-        weights_power,
-        exp_predictive,
-        weights_exp,
-    )
+    return diag_df, {
+        "masked": StrategyOutput(weights_masked, masked_predictive),
+        "power": StrategyOutput(weights_power, power_predictive),
+        "exp": StrategyOutput(weights_exp, exp_predictive),
+    }
 
 
-def demo_run_core() -> tuple[pd.DataFrame, tuple]:
+def demo_run_core() -> tuple[pd.DataFrame, dict[str, StrategyOutput]]:
     """Run a minimal smoke test of run_core on a short return sample."""
     df = prepare_returns(
         load_excess_returns(
@@ -853,7 +839,7 @@ def demo_run_core() -> tuple[pd.DataFrame, tuple]:
     )
     df_small = df.iloc[:150].copy()
 
-    results = run_core(
+    diag_df, outputs = run_core(
         df_small,
         start=20,
         burn_in=20,
@@ -866,7 +852,6 @@ def demo_run_core() -> tuple[pd.DataFrame, tuple]:
         eta=1.0,
     )
 
-    diag_df = results[0]
     if diag_df.empty:
         raise RuntimeError(
             "demo_run_core produced an empty diagnostic DataFrame."
@@ -874,7 +859,7 @@ def demo_run_core() -> tuple[pd.DataFrame, tuple]:
 
     print("demo_run_core passed")
     print(diag_df.tail())
-    return diag_df, results
+    return diag_df, outputs
 
 
 if __name__ == "__main__":

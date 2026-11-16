@@ -11,6 +11,7 @@ from scipy.integrate import quad
 
 from possibilistic_portfolio import alternative_investment_rules as air
 from possibilistic_portfolio.markowitz import markowitz_step
+from possibilistic_portfolio.predictive import StrategyOutput
 
 T, N = 120, 3
 BURN, PIU = 40, 10
@@ -23,6 +24,12 @@ def returns() -> pd.DataFrame:
     cov = 1e-4 * (0.3 * np.ones((N, N)) + 0.7 * np.eye(N))
     data = rng.multivariate_normal([0.001, 0.0005, 0.0002], cov, size=T)
     return pd.DataFrame(data, columns=["a", "b", "Mkt-RF"])
+
+
+def _fw(out: StrategyOutput) -> tuple[dict, pd.DataFrame]:
+    """(forecast, weights) of a predictive strategy."""
+    assert out.forecast is not None
+    return out.forecast, out.weights
 
 
 def _window_rows(returns: pd.DataFrame, t: int, w: int) -> pd.DataFrame:
@@ -70,13 +77,13 @@ def test_minvar_mean_target_is_gmv_portfolio_mean():
 
 
 def test_equal_weight(returns):
-    w = air.equal_weight_strategy(returns, start=FIRST)
+    w = air.equal_weight_strategy(returns, start=FIRST).weights
     _assert_nan_layout(w, FIRST)
     assert np.allclose(w.iloc[FIRST:-1], 1.0 / N)
 
 
 def test_market_weight(returns):
-    w = air.market_weight_strategy(returns, start=FIRST)
+    w = air.market_weight_strategy(returns, start=FIRST).weights
     _assert_nan_layout(w, FIRST)
     assert (w["Mkt-RF"].iloc[FIRST:-1] == 1.0).all()
     assert (w[["a", "b"]].iloc[FIRST:-1] == 0.0).all().all()
@@ -89,7 +96,7 @@ def test_market_weight_needs_market_column(returns):
 
 def test_minimum_variance(returns):
     win = 30
-    w = air.minimum_variance_strategy(returns, start=FIRST, window=win)
+    w = air.minimum_variance_strategy(returns, start=FIRST, window=win).weights
     _assert_nan_layout(w, FIRST)
     assert np.allclose(w.iloc[FIRST:-1].sum(axis=1), 1.0)
     t = 70
@@ -99,7 +106,7 @@ def test_minimum_variance(returns):
 
 
 def test_minimum_variance_window_longer_than_burn_in_delays_start(returns):
-    w = air.minimum_variance_strategy(returns, start=FIRST, window=80)
+    w = air.minimum_variance_strategy(returns, start=FIRST, window=80).weights
     _assert_nan_layout(w, 80)
 
 
@@ -107,7 +114,7 @@ def test_minimum_variance_window_longer_than_burn_in_delays_start(returns):
 
 
 def test_historical_moments_and_weights(returns):
-    pred, w = air.historical_expectations_weights(returns, start=FIRST)
+    pred, w = _fw(air.historical_expectations_weights(returns, start=FIRST))
     t = 70
     rows = returns.iloc[: t + 1]  # expanding: every return up to and incl. t
     assert np.allclose(pred["mu_hat"][t], rows.mean())
@@ -120,7 +127,7 @@ def test_historical_moments_and_weights(returns):
 
 def test_rolling_window_moments(returns):
     win = 25
-    pred, w = air.rolling_window_weights(returns, start=FIRST, window=win)
+    pred, w = _fw(air.rolling_window_weights(returns, start=FIRST, window=win))
     t = 90
     rows = _window_rows(returns, t, win)
     assert np.allclose(pred["mu_hat"][t], rows.mean())
@@ -164,8 +171,10 @@ def test_jorion_shrinkage_is_convex_and_strategy_uses_it(returns):
     est = air.jorion_bayes_stein_estimates(returns, start=FIRST, window=win)
     v = est["v"][FIRST:-1]
     assert ((v > 0) & (v < 1)).all()
-    pred, w = air.jorion_bayes_stein_strategy(
-        returns, start=FIRST, window=win, theta=2.0
+    pred, w = _fw(
+        air.jorion_bayes_stein_strategy(
+            returns, start=FIRST, window=win, theta=2.0
+        )
     )
     assert np.allclose(pred["mu_hat"], est["mu_star"], equal_nan=True)
     _assert_nan_layout(w, FIRST)
@@ -201,8 +210,10 @@ def test_kan_zhou_estimates(returns):
 def test_kan_zhou_strategy_scales_mean_by_h(returns):
     win = 30
     est = air.kan_zhou_three_fund_estimates(returns, start=FIRST, window=win)
-    pred, w = air.kan_zhou_three_fund_strategy(
-        returns, start=FIRST, window=win, theta=2.0
+    pred, w = _fw(
+        air.kan_zhou_three_fund_strategy(
+            returns, start=FIRST, window=win, theta=2.0
+        )
     )
     assert np.allclose(
         pred["mu_hat"], est["h"][0] * est["mu_star"], equal_nan=True

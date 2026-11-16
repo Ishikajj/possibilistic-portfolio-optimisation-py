@@ -37,11 +37,12 @@ from possibilistic_portfolio.config import DATASETS_DIR, RF_PATH, SIM_DATA_DIR
 
 T = 1400  # rows per slice
 N_ASSETS = 3  # portfolios / assets kept (+ Mkt-RF for the real slice)
+# pipeline_wrapper.RunSettings fields (Bayesian keeps its config pool cap)
 PARAMS: dict[str, Any] = dict(
     burn_in=300,
     periods_until_investment=100,  # first weights at row 400 -> ~1000 invested days
     theta=1.0,
-    max_models=20,
+    possibilistic_max_models=20,
     merge_threshold=0.15,
     nu_bandwidth=50,
     k_neighbours=5,
@@ -120,7 +121,10 @@ def build(bypass_necessity: bool = False) -> dict[str, np.ndarray]:
         ]:
             t0 = time.time()
             folder = pipeline_wrapper.calculate_all_functions_perdatasets(
-                dataset=returns_df, dataset_name=name, output_dir=tmp, **PARAMS
+                returns_df,
+                name,
+                settings=pipeline_wrapper.RunSettings(**PARAMS),
+                output_dir=tmp,
             )
             evaluation_pipeline.run_evaluation(folder, rf_series=rf, theta=1.0)
             for f in sorted(folder.iterdir()):

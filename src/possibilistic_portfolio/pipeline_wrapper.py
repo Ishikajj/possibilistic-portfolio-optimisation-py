@@ -1,10 +1,11 @@
-"""Pipeline wrapper: orchestrates all algorithms on a single dataset and loops
-over multiple datasets.
+"""Pipeline wrapper: runs the algorithms on one dataset and loops over
+datasets.
 
 Public entry points
 -------------------
-calculate_all_functions_perdatasets(dataset, dataset_name, ...)
-    Run every algorithm on one prepared returns DataFrame and persist outputs.
+calculate_all_functions_perdatasets(dataset, dataset_name, *, settings, algorithms)
+    Run the algorithms in ``ALGORITHMS`` (all, or the named ones) on one
+    prepared returns DataFrame and save their outputs.
 
 call_all_datasets(portfolios_paths, ...)
     Loop over Kenneth French CSV files, running two passes each (value- and
@@ -13,12 +14,20 @@ call_all_datasets(portfolios_paths, ...)
 call_all_simulated_datasets(sim_data_dir, sim_files, ...)
     Loop over pre-generated simulated dataset CSVs (produced by
     simulated_datasets.generate_and_save_sim_datasets).
+
+Run settings travel as one ``RunSettings`` object (defaults from config.py).
+``ALGORITHMS`` lists each algorithm with the settings it takes; every
+algorithm returns ``predictive.StrategyOutput`` (weights + optional forecast),
+possibilistic one per weighting scheme. The pipeline saves them all the same
+way.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -57,10 +66,143 @@ from possibilistic_portfolio.data_input import (
     prepare_returns,
 )
 from possibilistic_portfolio.markowitz import markowitz_long_only
-from possibilistic_portfolio.predictive import save_predictive
+from possibilistic_portfolio.predictive import StrategyOutput, save_predictive
 from possibilistic_portfolio.simulated_datasets import DGPS, sim_paths
 
-# ── Internal helpers ─────────────────────────────────────────────────────────
+# ── Settings and output types ────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class RunSettings:
+    """Settings of one pipeline run. Defaults come from config.py (the
+    values of the FYP runs). Change one with e.g. ``RunSettings(theta=2.0)``.
+    """
+
+    burn_in: int = BURN_IN
+    periods_until_investment: int = PERIODS_UNTIL_INVESTMENT
+    theta: float = THETA
+    rolling_window_long: int = ROLLING_WINDOW_LONG
+    rolling_window_short: int = ROLLING_WINDOW_SHORT
+    bayesian_max_models: int = BAYESIAN_MAX_MODELS
+    possibilistic_max_models: int = POSSIBILISTIC_MAX_MODELS
+    merge_threshold: float = MERGE_THRESHOLD
+    nu_bandwidth: int = NU_BANDWIDTH
+    k_neighbours: int = K_NEIGHBOURS
+    gamma: float = NECESSITY_GAMMA
+    eta: float = NECESSITY_ETA
+    device: str = NECESSITY_DEVICE
+
+    @property
+    def start(self) -> int:
+        """First row with weights, for every strategy (``burn_in`` is also
+        passed to the averaging methods, which use it to set their prior)."""
+        return self.burn_in + self.periods_until_investment
+
+
+@dataclass
+class AlgorithmRun:
+    """What one algorithm produces: its strategies (file prefix → output,
+    saved as ``<prefix>_weights.csv`` / ``_predictive.npz`` /
+    ``_longonly_weights.csv``) and extra tables (file stem → table, saved as
+    ``<stem>.csv``)."""
+
+    strategies: dict[str, StrategyOutput]
+    tables: dict[str, pd.DataFrame] = field(default_factory=dict)
+
+
+# ── The algorithms ────────────────────────────────────────────────────────────
+
+# Algorithm name -> (function, the settings it takes besides `start`), in run
+# order. Every function is (returns_df, *, start, ...) -> StrategyOutput,
+# except possibilistic (see _run_algorithm). Select with ``algorithms=[...]``;
+# to add an algorithm, add an entry.
+ALGORITHMS: dict[
+    str, tuple[Callable[..., Any], Callable[[RunSettings], dict]]
+] = {
+    "equal_weight": (equal_weight_strategy, lambda s: {}),
+    "market_weight": (market_weight_strategy, lambda s: {}),
+    "minimum_variance": (
+        minimum_variance_strategy,
+        lambda s: {"window": s.rolling_window_long},
+    ),
+    "historical_expanding": (
+        historical_expectations_weights,
+        lambda s: {"theta": s.theta},
+    ),
+    "rolling_window_long": (
+        rolling_window_weights,
+        lambda s: {"window": s.rolling_window_long, "theta": s.theta},
+    ),
+    "rolling_window_short": (
+        rolling_window_weights,
+        lambda s: {"window": s.rolling_window_short, "theta": s.theta},
+    ),
+    "jorion_bayes_stein": (
+        jorion_bayes_stein_strategy,
+        lambda s: {"window": s.rolling_window_long, "theta": s.theta},
+    ),
+    "kan_zhou_three_fund": (
+        kan_zhou_three_fund_strategy,
+        lambda s: {"window": s.rolling_window_long, "theta": s.theta},
+    ),
+    "bayesian_averaging": (
+        bayesian_averaging.run_core,
+        lambda s: {
+            "burn_in": s.burn_in,
+            "theta": s.theta,
+            "max_models": s.bayesian_max_models,
+        },
+    ),
+    "possibilistic": (
+        possibilistic_bayesian.run_core,
+        lambda s: {
+            "burn_in": s.burn_in,
+            "theta": s.theta,
+            "max_models": s.possibilistic_max_models,
+            "merge_threshold": s.merge_threshold,
+            "nu_bandwidth": s.nu_bandwidth,
+            "k_neighbours": s.k_neighbours,
+            "gamma": s.gamma,
+            "eta": s.eta,
+            "device": s.device,
+        },
+    ),
+}
+
+
+def _run_algorithm(
+    name: str, returns_df: pd.DataFrame, settings: RunSettings
+) -> AlgorithmRun:
+    """Run one algorithm from ALGORITHMS with its settings."""
+    if name == "market_weight" and "Mkt-RF" not in returns_df.columns:
+        return AlgorithmRun({})  # e.g. simulated data: no market column
+    fn, settings_for = ALGORITHMS[name]
+    result = fn(returns_df, start=settings.start, **settings_for(settings))
+    if name == "possibilistic":
+        # (diagnostics, {scheme: output}): one strategy per weighting scheme,
+        # so a new scheme (e.g. plain possibility weighting) is one more key
+        diag_df, outputs = result
+        return AlgorithmRun(
+            {f"possibilistic_{scheme}": o for scheme, o in outputs.items()},
+            tables={"possibilistic_diagnostics": diag_df},
+        )
+    return AlgorithmRun({name: result})
+
+
+def _select_algorithms(algorithms: Sequence[str] | None) -> list[str]:
+    """Names from ALGORITHMS in run order (``None`` = all). Unknown names
+    raise, listing what is available."""
+    if algorithms is None:
+        return list(ALGORITHMS)
+    unknown = [a for a in algorithms if a not in ALGORITHMS]
+    if unknown:
+        raise ValueError(
+            f"Unknown algorithms {unknown}; available: {list(ALGORITHMS)}"
+        )
+    return [a for a in ALGORITHMS if a in algorithms]
+
+
+# ── Saving ────────────────────────────────────────────────────────────────────
 
 
 def _save_algo_outputs(
@@ -82,84 +224,42 @@ def _save_algo_outputs(
         save_predictive(folder, algo_name, mu_sigma_dict)
 
 
-# ── Public API ─────────────────────────────────
+# ── Public API ────────────────────────────────────────────────────────────────
 
 
 def calculate_all_functions_perdatasets(
     dataset: pd.DataFrame,
     dataset_name: str,
-    burn_in: int = BURN_IN,
-    periods_until_investment: int = PERIODS_UNTIL_INVESTMENT,
-    theta: float = THETA,
-    max_models: int = POSSIBILISTIC_MAX_MODELS,
-    merge_threshold: float = MERGE_THRESHOLD,
-    nu_bandwidth: int = NU_BANDWIDTH,
-    k_neighbours: int = K_NEIGHBOURS,
-    gamma: float = NECESSITY_GAMMA,
-    eta: float = NECESSITY_ETA,
-    rolling_window_long: int = ROLLING_WINDOW_LONG,
-    rolling_window_short: int = ROLLING_WINDOW_SHORT,
+    *,
+    settings: RunSettings | None = None,
+    algorithms: Sequence[str] | None = None,
     output_dir: Path | str | None = None,
-    device: str = NECESSITY_DEVICE,
 ) -> Path:
-    """Run every portfolio algorithm on one dataset and persist all outputs.
+    """Run the algorithms on one dataset and save every output.
 
-    Algorithms run (in order):
-      1.  1/N equal weight
-      2.  Market weight           (only when ``Mkt-RF`` column is present)
-      3.  Minimum variance
-      4.  Historical expanding-window Markowitz
-      5.  Rolling-window Markowitz
-      6.  Jorion Bayes-Stein
-      7.  Kan-Zhou three-fund
-      8.  Bayesian model averaging (probabilistic)
-      9.  Possibilistic Bayesian averaging — masked weighting
-      10. Possibilistic Bayesian averaging — power penalty weighting
-      11. Possibilistic Bayesian averaging — exponential penalty weighting
-
-    Outputs are written to ``<output_dir>/<dataset_name>/``.
-    Algorithms that produce predictive moments store three files each:
-      ``<algo>_weights.csv``, ``<algo>_mus.npy``, ``<algo>_sigmas.npy``.
-    Weight-only algorithms store only ``<algo>_weights.csv``.
-    The possibilistic run also stores ``possibilistic_diagnostics.csv``.
+    Writes into ``<output_dir>/<dataset_name>/``: ``returns.csv``, and for
+    each strategy ``<strategy>_weights.csv``; predictive strategies also
+    ``<strategy>_predictive.npz`` (forecast + index) and
+    ``<strategy>_longonly_weights.csv``; the possibilistic run also
+    ``possibilistic_diagnostics.csv``.
 
     Parameters
     ----------
-    dataset : pd.DataFrame
-        Numeric returns only, no RF column; indexed by Date for real data
+    dataset : numeric returns, no RF column; indexed by Date for real data
         (row numbers for simulated data). The index is carried to every output.
-    dataset_name : str
-        Used as the output sub-folder name.
-    burn_in : int
-        Number of initial observations used to seed model priors.
-    periods_until_investment : int
-        Additional lag before weights are applied (default 1 = next-day).
-    theta : float
-        Risk-aversion parameter for Markowitz weight computation.
-    max_models : int
-        Maximum model-pool size for possibilistic and Bayesian averaging.
-    merge_threshold : float
-        Hellinger distance threshold for merging models (possibilistic only).
-    nu_bandwidth : int
-        Maximum |nu_i - nu_j| for merge candidacy (possibilistic only).
-    k_neighbours : int
-        Number of forward neighbours to scan when merging (possibilistic only).
-    gamma : float
-        Power exponent for power-weighting scheme.
-    eta : float
-        Penalty scale for exponential-weighting scheme.
-    rolling_window_long : int
-        Look-back window for long rolling/shrinkage strategies.
-    rolling_window_short : int
-        Look-back window for short rolling strategies.
-    output_dir : Path or str, optional
-        Root directory for output folders.  Defaults to current working dir.
+    dataset_name : output sub-folder name.
+    settings : run settings (``None`` = ``RunSettings()``, the config.py
+        defaults).
+    algorithms : names from ``ALGORITHMS`` to run (``None`` = all), always in
+        registry order. Unknown names raise.
+    output_dir : root folder for the dataset folder (default: current working
+        directory).
 
-    Returns
-    -------
-    folder : Path
-        Path to the created output folder.
+    Returns the dataset folder.
     """
+    settings = RunSettings() if settings is None else settings
+    names = _select_algorithms(algorithms)
+
     base = Path(output_dir) if output_dir is not None else Path.cwd()
     folder = base / dataset_name
     folder.mkdir(parents=True, exist_ok=True)
@@ -167,167 +267,21 @@ def calculate_all_functions_perdatasets(
     returns_df = dataset.copy()
     returns_df.to_csv(folder / "returns.csv")
 
-    # First row with weights, for every strategy (burn_in is also passed on
-    # to the averaging methods, which use it to set their prior).
-    start = burn_in + periods_until_investment
-
-    # 1. 1/N ───────────────────────────────────────────────
-    print(f"[{dataset_name}] 1/N equal weight...")
-    weights_1n = equal_weight_strategy(returns_df, start=start)
-    _save_algo_outputs(folder, "equal_weight", weights=weights_1n)
-
-    # 2. Market weight ───────────────────────────────────
-    if "Mkt-RF" in returns_df.columns:
-        print(f"[{dataset_name}] Market weight...")
-        weights_mkt = market_weight_strategy(returns_df, start=start)
-        _save_algo_outputs(folder, "market_weight", weights=weights_mkt)
-
-    # 3. Minimum variance ───────────────────────────────────────
-    print(f"[{dataset_name}] Minimum variance...")
-    weights_mv = minimum_variance_strategy(
-        returns_df,
-        start=start,
-        window=rolling_window_long,
-    )
-    _save_algo_outputs(folder, "minimum_variance", weights=weights_mv)
-
-    # 4. Historical expanding window ─────────────────────────
-    print(f"[{dataset_name}] Historical expanding-window Markowitz...")
-    hist_ms, weights_hist = historical_expectations_weights(
-        returns_df, start=start, theta=theta
-    )
-    _save_algo_outputs(
-        folder,
-        "historical_expanding",
-        weights=weights_hist,
-        mu_sigma_dict=hist_ms,
-    )
-
-    # 5. Rolling window ────────────────────────────────────────
-    print(
-        f"[{dataset_name}] Rolling-window Markowitz (window={rolling_window_long})..."
-    )
-    roll_long_ms, weights_roll = rolling_window_weights(
-        returns_df, start=start, window=rolling_window_long, theta=theta
-    )
-    _save_algo_outputs(
-        folder,
-        "rolling_window_long",
-        weights=weights_roll,
-        mu_sigma_dict=roll_long_ms,
-    )
-
-    # 5b. Rolling window (short) ──────────────────────────────
-    print(
-        f"[{dataset_name}] Rolling-window Markowitz (window={rolling_window_short})..."
-    )
-    roll_short_ms, weights_roll = rolling_window_weights(
-        returns_df, start=start, window=rolling_window_short, theta=theta
-    )
-    _save_algo_outputs(
-        folder,
-        "rolling_window_short",
-        weights=weights_roll,
-        mu_sigma_dict=roll_short_ms,
-    )
-
-    # 6. Jorion Bayes-Stein ──────────────────────────────────
-    print(f"[{dataset_name}] Jorion Bayes-Stein...")
-    jbs_ms, weights_jbs = jorion_bayes_stein_strategy(
-        returns_df,
-        window=rolling_window_long,
-        start=start,
-        theta=theta,
-    )
-    _save_algo_outputs(
-        folder, "jorion_bayes_stein", weights=weights_jbs, mu_sigma_dict=jbs_ms
-    )
-
-    # 7. Kan-Zhou three-fund ────────────────────────────────────
-    print(f"[{dataset_name}] Kan-Zhou three-fund...")
-    kz_ms, weights_kz = kan_zhou_three_fund_strategy(
-        returns_df,
-        window=rolling_window_long,
-        start=start,
-        theta=theta,
-    )
-    _save_algo_outputs(
-        folder, "kan_zhou_three_fund", weights=weights_kz, mu_sigma_dict=kz_ms
-    )
-
-    # 8. Bayesian model averaging ────────────────────────────
-    print(f"[{dataset_name}] Bayesian model averaging...")
-    # Bayesian has its own pool cap (config.BAYESIAN_MAX_MODELS);
-    # `max_models` is the possibilistic one. Passed through properly in P2.
-    bay_ms, weights_bay = bayesian_averaging.run_core(
-        returns_df,
-        start=start,
-        burn_in=burn_in,
-        theta=theta,
-        max_models=BAYESIAN_MAX_MODELS,
-    )
-    _save_algo_outputs(
-        folder, "bayesian_averaging", weights=weights_bay, mu_sigma_dict=bay_ms
-    )
-
-    # 9–11. Possibilistic Bayesian averaging (three weighting schemes) ───
-    print(f"[{dataset_name}] Possibilistic Bayesian averaging...")
-    (
-        diag_df,
-        masked_pred,
-        weights_masked,
-        power_pred,
-        weights_power,
-        exp_pred,
-        weights_exp,
-    ) = possibilistic_bayesian.run_core(
-        returns_df,
-        start=start,
-        burn_in=burn_in,
-        theta=theta,
-        merge_threshold=merge_threshold,
-        max_models=max_models,
-        nu_bandwidth=nu_bandwidth,
-        k_neighbours=k_neighbours,
-        gamma=gamma,
-        eta=eta,
-        device=device,
-    )
-    _save_algo_outputs(
-        folder,
-        "possibilistic_masked",
-        weights=weights_masked,
-        mu_sigma_dict=masked_pred,
-    )
-    _save_algo_outputs(
-        folder,
-        "possibilistic_power",
-        weights=weights_power,
-        mu_sigma_dict=power_pred,
-    )
-    _save_algo_outputs(
-        folder, "possibilistic_exp", weights=weights_exp, mu_sigma_dict=exp_pred
-    )
-    diag_df.to_csv(folder / "possibilistic_diagnostics.csv")
-
-    for algo_name, mu_sigma in [
-        ("historical_expanding", hist_ms),
-        ("rolling_window_long", roll_long_ms),
-        ("rolling_window_short", roll_short_ms),
-        ("jorion_bayes_stein", jbs_ms),
-        ("kan_zhou_three_fund", kz_ms),
-        ("bayesian_averaging", bay_ms),
-        ("possibilistic_masked", masked_pred),
-        ("possibilistic_power", power_pred),
-        ("possibilistic_exp", exp_pred),
-    ]:
-        long_only_weights = markowitz_long_only(
-            mu_sigma_dict=mu_sigma,
-            returns_df=returns_df,
-            start=start,
-            theta=theta,
-        )
-        long_only_weights.to_csv(folder / f"{algo_name}_longonly_weights.csv")
+    for name in names:
+        print(f"[{dataset_name}] {name}...")
+        run = _run_algorithm(name, returns_df, settings)
+        for strategy, out in run.strategies.items():
+            _save_algo_outputs(folder, strategy, out.weights, out.forecast)
+            if out.forecast is not None:
+                long_only = markowitz_long_only(
+                    mu_sigma_dict=out.forecast,
+                    returns_df=returns_df,
+                    start=settings.start,
+                    theta=settings.theta,
+                )
+                long_only.to_csv(folder / f"{strategy}_longonly_weights.csv")
+        for stem, table in run.tables.items():
+            table.to_csv(folder / f"{stem}.csv")
 
     print(f"[{dataset_name}] All outputs saved to: {folder}")
     return folder
@@ -339,20 +293,11 @@ def call_all_datasets(
     start_date: str | None = "1963-01-01",
     end_date: str | None = None,
     output_dir: Path | str | None = None,
-    burn_in: int = BURN_IN,
-    periods_until_investment: int = PERIODS_UNTIL_INVESTMENT,
-    theta: float = THETA,
-    max_models: int = POSSIBILISTIC_MAX_MODELS,
-    merge_threshold: float = MERGE_THRESHOLD,
-    nu_bandwidth: int = NU_BANDWIDTH,
-    k_neighbours: int = K_NEIGHBOURS,
-    gamma: float = NECESSITY_GAMMA,
-    eta: float = NECESSITY_ETA,
-    rolling_window_long: int = ROLLING_WINDOW_LONG,
-    rolling_window_short: int = ROLLING_WINDOW_SHORT,
-    device: str = NECESSITY_DEVICE,
+    *,
+    settings: RunSettings | None = None,
+    algorithms: Sequence[str] | None = None,
 ) -> list[Path]:
-    """Run the full pipeline on every Kenneth French dataset in two passes.
+    """Run the pipeline on every Kenneth French dataset in two passes.
 
     For each path in ``portfolios_paths`` the file is read twice: the
     value-weighted block (folder ``<stem>_value_weighted``), then the
@@ -361,28 +306,19 @@ def call_all_datasets(
 
     In both passes the excess-returns preparation (subtract RF, slice dates,
     drop non-numeric columns) is applied before handing the data to
-    ``calculate_all_functions_perdatasets``.
+    ``calculate_all_functions_perdatasets``. A file that can't be loaded is
+    skipped with a warning.
 
     Parameters
     ----------
-    portfolios_paths : list of Path or str
-        Paths to Kenneth French multi-table CSV files.
-    risk_free_path : Path or str
-        Path to the Fama-French factors CSV containing the ``RF`` column.
-    start_date : str, optional
-        Earliest date to include (default ``"1963-01-01"``).
-    end_date : str, optional
-        Latest date to include (default: no upper bound).
-    output_dir : Path or str, optional
-        Root directory for output folders.  Defaults to current working dir.
-    burn_in, periods_until_investment, theta, max_models, merge_threshold,
-    nu_bandwidth, k_neighbours, gamma, eta, rolling_window :
-        Forwarded verbatim to ``calculate_all_functions_perdatasets``.
+    portfolios_paths : paths to Kenneth French multi-table CSV files.
+    risk_free_path : Fama-French factors CSV with the ``RF`` column.
+    start_date, end_date : date window (``None`` = no bound).
+    output_dir : root folder for the dataset folders (default: current
+        working directory).
+    settings, algorithms : passed to ``calculate_all_functions_perdatasets``.
 
-    Returns
-    -------
-    output_folders : list of Path
-        One Path per successful (dataset, weighting) combination.
+    Returns one folder per (dataset, weighting) that ran.
     """
     output_folders: list[Path] = []
 
@@ -415,21 +351,11 @@ def call_all_datasets(
             returns_df = prepare_returns(excess_df)  # indexed by Date
 
             folder = calculate_all_functions_perdatasets(
-                dataset=returns_df,
-                dataset_name=dataset_name,
-                burn_in=burn_in,
-                periods_until_investment=periods_until_investment,
-                theta=theta,
-                max_models=max_models,
-                merge_threshold=merge_threshold,
-                nu_bandwidth=nu_bandwidth,
-                k_neighbours=k_neighbours,
-                gamma=gamma,
-                eta=eta,
-                rolling_window_long=rolling_window_long,
-                rolling_window_short=rolling_window_short,
+                returns_df,
+                dataset_name,
+                settings=settings,
+                algorithms=algorithms,
                 output_dir=output_dir,
-                device=device,
             )
             # RF on the same dates, so evaluation matches it by date (CEQ).
             excess_df[["Date", "RF"]].to_csv(folder / "rf.csv", index=False)
@@ -445,33 +371,24 @@ def call_all_simulated_datasets(
     sim_data_dir: Path | str,
     sim_files: list[tuple[str, str, str]],
     output_dir: Path | str | None = None,
-    burn_in: int = BURN_IN,
-    periods_until_investment: int = PERIODS_UNTIL_INVESTMENT,
-    theta: float = THETA,
-    max_models: int = POSSIBILISTIC_MAX_MODELS,
-    merge_threshold: float = MERGE_THRESHOLD,
-    nu_bandwidth: int = NU_BANDWIDTH,
-    k_neighbours: int = K_NEIGHBOURS,
-    gamma: float = NECESSITY_GAMMA,
-    eta: float = NECESSITY_ETA,
-    rolling_window_long: int = ROLLING_WINDOW_LONG,
-    rolling_window_short: int = ROLLING_WINDOW_SHORT,
-    device: str = NECESSITY_DEVICE,
+    *,
+    settings: RunSettings | None = None,
+    algorithms: Sequence[str] | None = None,
 ) -> list[Path]:
-    """Run the full algorithm suite on all saved simulated datasets.
+    """Run the pipeline on saved simulated datasets.
 
     Loads portfolio CSVs and their paired RF CSVs from ``sim_data_dir``
     (written by ``simulated_datasets.generate_and_save_sim_datasets``).
-    Data is already excess returns in decimals — no marker parsing or RF
-    subtraction needed.  The RF CSV is copied into each output folder so
-    the evaluation pipeline can compute CEQ.
+    Data is already excess returns in decimals. The RF CSV is copied into
+    each output folder so the evaluation pipeline can compute CEQ. Missing
+    files are skipped with a warning.
 
     Parameters
     ----------
-    sim_data_dir : Path or str
-        Directory containing the saved CSVs.
-    sim_files : list of (dataset_name, portfolio_filename, rf_filename)
-        One tuple per DGP.
+    sim_data_dir : folder with the saved CSVs.
+    sim_files : one ``(dataset_name, portfolio_filename, rf_filename)`` per DGP.
+    output_dir : root folder for the dataset folders.
+    settings, algorithms : passed to ``calculate_all_functions_perdatasets``.
     """
     sim_data_dir = Path(sim_data_dir)
     output_folders: list[Path] = []
@@ -498,21 +415,11 @@ def call_all_simulated_datasets(
             ]
 
             folder = calculate_all_functions_perdatasets(
-                dataset=returns_df,
-                dataset_name=dataset_name,
-                burn_in=burn_in,
-                periods_until_investment=periods_until_investment,
-                theta=theta,
-                max_models=max_models,
-                merge_threshold=merge_threshold,
-                nu_bandwidth=nu_bandwidth,
-                k_neighbours=k_neighbours,
-                gamma=gamma,
-                eta=eta,
-                rolling_window_long=rolling_window_long,
-                rolling_window_short=rolling_window_short,
+                returns_df,
+                dataset_name,
+                settings=settings,
+                algorithms=algorithms,
                 output_dir=output_dir,
-                device=device,
             )
 
             # Copy RF into output folder so evaluation pipeline can load it.
@@ -523,7 +430,10 @@ def call_all_simulated_datasets(
     return output_folders
 
 
-def main_simulated():
+# ── Entry points (settings = config.py defaults, the FYP values) ─────────────
+
+
+def main_simulated() -> list[Path]:
     # Saved CSVs of every DGP (see simulated_datasets.sim_paths / DGPS).
     sim_files = []
     for label in DGPS:
@@ -531,68 +441,17 @@ def main_simulated():
         sim_files.append((label, data_csv.name, rf_csv.name))
 
     return call_all_simulated_datasets(
-        sim_data_dir=SIM_DATA_DIR,
-        sim_files=sim_files,
-        burn_in=500,
-        periods_until_investment=500,
-        theta=1.0,
-        max_models=100,
-        merge_threshold=0.15,
-        nu_bandwidth=50,
-        k_neighbours=5,
-        gamma=1.0,
-        eta=1.0,
-        rolling_window_long=252,
-        rolling_window_short=63,
-        device="cuda",
-        output_dir=RESULTS_DIR,
+        SIM_DATA_DIR, sim_files, output_dir=RESULTS_DIR, settings=RunSettings()
     )
 
 
-def main():
-    portfolio_paths = [DATASETS_DIR / f for f in FRENCH_PORTFOLIO_FILES]
-    risk_free_path = RF_PATH
-
-    start_date = "1980-01-01"
-
-    burn_in = 500
-
-    periods_until_investment = 500
-
-    theta = 1
-
-    max_models = 100
-
-    merge_threshold = 0.15
-
-    nu_bandwidth = 50
-
-    k_neighbours = 5
-    gamma = 1.0
-
-    eta = 1.0
-
-    rolling_window_long = 252
-
-    rolling_window_short = 63
-
+def main() -> list[Path]:
     return call_all_datasets(
-        portfolios_paths=portfolio_paths,
-        risk_free_path=risk_free_path,
-        start_date=start_date,
-        burn_in=burn_in,
-        periods_until_investment=periods_until_investment,
-        theta=theta,
-        max_models=max_models,
-        merge_threshold=merge_threshold,
-        nu_bandwidth=nu_bandwidth,
-        k_neighbours=k_neighbours,
-        gamma=gamma,
-        eta=eta,
-        rolling_window_long=rolling_window_long,
-        rolling_window_short=rolling_window_short,
-        device="cuda",
+        [DATASETS_DIR / f for f in FRENCH_PORTFOLIO_FILES],
+        risk_free_path=RF_PATH,
+        start_date="1980-01-01",
         output_dir=RESULTS_DIR,
+        settings=RunSettings(),
     )
 
 

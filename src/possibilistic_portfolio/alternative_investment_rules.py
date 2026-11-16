@@ -32,7 +32,7 @@ from scipy.special import (
 
 from possibilistic_portfolio.config import ROLLING_WINDOW_LONG, THETA
 from possibilistic_portfolio.markowitz import markowitz_unconstrained
-from possibilistic_portfolio.predictive import make_predictive
+from possibilistic_portfolio.predictive import StrategyOutput, make_predictive
 
 
 def _incomplete_beta_unregularized(a: float, b: float, x: float) -> float:
@@ -82,7 +82,7 @@ def historical_expectations_weights(
     *,
     start: int,
     theta: float = THETA,
-) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
+) -> StrategyOutput:
     """Sample mean and covariance of all returns up to and including t
     (expanding window from row 0), from `start` on."""
     T, n = returns_df.shape
@@ -99,7 +99,7 @@ def historical_expectations_weights(
         mu_sigma_dict, returns_df, start, theta=theta
     )
 
-    return mu_sigma_dict, investment_weights
+    return StrategyOutput(investment_weights, mu_sigma_dict)
 
 
 def rolling_window_weights(
@@ -108,7 +108,7 @@ def rolling_window_weights(
     start: int,
     window: int = ROLLING_WINDOW_LONG,
     theta: float = THETA,
-) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
+) -> StrategyOutput:
     """Sample mean and covariance of the last `window` returns up to and
     including t, from `start` (or `window`, if later)."""
 
@@ -126,14 +126,14 @@ def rolling_window_weights(
         mu_sigma_dict, returns_df, start, theta=theta
     )
 
-    return mu_sigma_dict, investment_weights
+    return StrategyOutput(investment_weights, mu_sigma_dict)
 
 
 def equal_weight_strategy(
     returns_df: pd.DataFrame,
     *,
     start: int,
-) -> pd.DataFrame:
+) -> StrategyOutput:
     """Create 1/N weights from `start`, last row excluded."""
     T, n = returns_df.shape
 
@@ -143,10 +143,10 @@ def equal_weight_strategy(
     if start < end:
         weights[start:end] = 1.0 / n
 
-    return pd.DataFrame(
-        weights,
-        index=returns_df.index,
-        columns=returns_df.columns,
+    return StrategyOutput(
+        pd.DataFrame(
+            weights, index=returns_df.index, columns=returns_df.columns
+        )
     )
 
 
@@ -155,7 +155,7 @@ def market_weight_strategy(
     *,
     start: int,
     market_col: str = "Mkt-RF",
-) -> pd.DataFrame:
+) -> StrategyOutput:
     """Create market weights from `start`, last row excluded."""
     T, n = returns_df.shape
 
@@ -172,10 +172,10 @@ def market_weight_strategy(
         weights[start:end, :] = 0.0
         weights[start:end, market_idx] = 1.0
 
-    return pd.DataFrame(
-        weights,
-        index=returns_df.index,
-        columns=returns_df.columns,
+    return StrategyOutput(
+        pd.DataFrame(
+            weights, index=returns_df.index, columns=returns_df.columns
+        )
     )
 
 
@@ -184,7 +184,7 @@ def minimum_variance_strategy(
     *,
     start: int,
     window: int = ROLLING_WINDOW_LONG,
-) -> pd.DataFrame:
+) -> StrategyOutput:
     """Create minimum variance weights from `start` (or `window`, if later)."""
     T, n = returns_df.shape
 
@@ -199,10 +199,10 @@ def minimum_variance_strategy(
         w /= w.sum()  # normalize to sum to 1
         weights[t] = w
 
-    return pd.DataFrame(
-        weights,
-        index=returns_df.index,
-        columns=returns_df.columns,
+    return StrategyOutput(
+        pd.DataFrame(
+            weights, index=returns_df.index, columns=returns_df.columns
+        )
     )
 
 
@@ -294,7 +294,7 @@ def jorion_bayes_stein_strategy(
     start: int,
     window: int = ROLLING_WINDOW_LONG,
     theta: float = THETA,
-) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
+) -> StrategyOutput:
     """Create Jorion's Bayes-Stein weights with burn-in and last-row exclusion."""
     est = jorion_bayes_stein_estimates(
         returns_df=returns_df,
@@ -307,12 +307,13 @@ def jorion_bayes_stein_strategy(
     )
 
     # Use existing pipeline to turn (mu*, Sigma*) into weights
-    return mu_sigma_dict, markowitz_unconstrained(
+    weights = markowitz_unconstrained(
         mu_sigma_dict=mu_sigma_dict,
         returns_df=returns_df,
         start=start,
         theta=theta,
     )
+    return StrategyOutput(weights, mu_sigma_dict)
 
 
 def kan_zhou_three_fund_estimates(
@@ -409,7 +410,7 @@ def kan_zhou_three_fund_strategy(
     start: int,
     window: int = ROLLING_WINDOW_LONG,
     theta: float = THETA,
-) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
+) -> StrategyOutput:
     """Kan and Zhou (2007) three-fund rule.
 
     Implements Section 6.7:
@@ -422,7 +423,8 @@ def kan_zhou_three_fund_strategy(
     Convention: weights at index t are applied to returns at index t+1 (handled elsewhere via shift(-1)).
 
     Returns:
-      DataFrame of weights with same index/columns as `returns_df`.
+      StrategyOutput: weights (same index/columns as `returns_df`) and the
+      forecast (mu = h * mu_star, see below).
     """
     est = kan_zhou_three_fund_estimates(
         returns_df=returns_df,
@@ -439,9 +441,10 @@ def kan_zhou_three_fund_strategy(
 
     mu_sigma_dict = make_predictive(mu_tilde, sigma_hat, returns_df.index)
 
-    return mu_sigma_dict, markowitz_unconstrained(
+    weights = markowitz_unconstrained(
         mu_sigma_dict=mu_sigma_dict,
         returns_df=returns_df,
         start=start,
         theta=theta,
     )
+    return StrategyOutput(weights, mu_sigma_dict)

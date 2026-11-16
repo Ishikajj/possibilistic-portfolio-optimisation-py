@@ -19,6 +19,8 @@ Timing convention (the whole pipeline):
 check_aligned only checks that forecast and returns are the same rows (same
 labels, same order); the timing above is a convention, enforced by those tests.
 
+StrategyOutput   — what every algorithm returns: weights + forecast (None for
+                   weight-only strategies).
 make_predictive  — build the dict; every algorithm uses it, so "index" is always set.
 check_aligned    — raise unless the forecast's index equals the returns' index.
 save_predictive  — write <algo>_predictive.npz (mu_hat, sigma_hat, index) to a run folder.
@@ -26,10 +28,20 @@ load_predictive  — read it back; falls back to the old <algo>_mus.npy / _sigma
                    (runs before 2026-11-16, no index: matched by position only).
 """
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+
+@dataclass
+class StrategyOutput:
+    """One strategy's result: weights indexed like the returns and, for
+    predictive strategies, the forecast dict (``make_predictive``)."""
+
+    weights: pd.DataFrame
+    forecast: dict | None = None
 
 
 def make_predictive(

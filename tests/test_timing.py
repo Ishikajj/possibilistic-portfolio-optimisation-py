@@ -29,6 +29,7 @@ from possibilistic_portfolio import bayesian_averaging as ba
 from possibilistic_portfolio import evaluation_pipeline as ev
 from possibilistic_portfolio import pipeline_wrapper as pw
 from possibilistic_portfolio import possibilistic_bayesian as pb
+from possibilistic_portfolio.predictive import StrategyOutput
 
 T, N = 150, 3
 BURN, START, WIN = 40, 60, 30
@@ -53,37 +54,43 @@ def returns() -> pd.DataFrame:
     )
 
 
+def _pair(out: StrategyOutput) -> tuple[dict | None, pd.DataFrame]:
+    return out.forecast, out.weights
+
+
 def _possibilistic(r):
-    _, m, w_m, p, w_p, e, w_e = pb.run_core(
+    _, outputs = pb.run_core(
         r, burn_in=BURN, start=START, max_models=15, n_jobs=1
     )
-    return [(m, w_m), (p, w_p), (e, w_e)]
+    return [_pair(o) for o in outputs.values()]
 
 
 # name -> returns_df -> list of (forecast dict or None, weights DataFrame)
 ALGOS = {
     "equal_weight": lambda r: [
-        (None, air.equal_weight_strategy(r, start=START))
+        _pair(air.equal_weight_strategy(r, start=START))
     ],
     "market_weight": lambda r: [
-        (None, air.market_weight_strategy(r, start=START))
+        _pair(air.market_weight_strategy(r, start=START))
     ],
     "minimum_variance": lambda r: [
-        (None, air.minimum_variance_strategy(r, start=START, window=WIN))
+        _pair(air.minimum_variance_strategy(r, start=START, window=WIN))
     ],
     "historical_expanding": lambda r: [
-        air.historical_expectations_weights(r, start=START)
+        _pair(air.historical_expectations_weights(r, start=START))
     ],
     "rolling_window": lambda r: [
-        air.rolling_window_weights(r, start=START, window=WIN)
+        _pair(air.rolling_window_weights(r, start=START, window=WIN))
     ],
     "jorion_bayes_stein": lambda r: [
-        air.jorion_bayes_stein_strategy(r, start=START, window=WIN)
+        _pair(air.jorion_bayes_stein_strategy(r, start=START, window=WIN))
     ],
     "kan_zhou_three_fund": lambda r: [
-        air.kan_zhou_three_fund_strategy(r, start=START, window=WIN)
+        _pair(air.kan_zhou_three_fund_strategy(r, start=START, window=WIN))
     ],
-    "bayesian_averaging": lambda r: [ba.run_core(r, burn_in=BURN, start=START)],
+    "bayesian_averaging": lambda r: [
+        _pair(ba.run_core(r, burn_in=BURN, start=START))
+    ],
     "possibilistic": _possibilistic,
 }
 IGNORE_RETURNS = {"equal_weight", "market_weight"}
@@ -122,7 +129,7 @@ def test_uses_return_at_t(name, returns):
     for a, b in zip(ALGOS[name](returns), ALGOS[name](changed), strict=True):
         _assert_same_rows(a, b, slice(None, T_CHECK))
         (fa, wa), (fb, wb) = a, b
-        if fa is not None:
+        if fa is not None and fb is not None:
             assert not np.allclose(fa["mu_hat"][T_CHECK], fb["mu_hat"][T_CHECK])
         assert not np.allclose(wa.iloc[T_CHECK], wb.iloc[T_CHECK])
 
@@ -135,11 +142,13 @@ def _run_and_collect(data: pd.DataFrame, output_dir) -> dict[str, pd.DataFrame]:
     folder = pw.calculate_all_functions_perdatasets(
         data,
         "ds",
-        burn_in=30,
-        periods_until_investment=10,
-        max_models=8,
-        rolling_window_long=20,
-        rolling_window_short=10,
+        settings=pw.RunSettings(
+            burn_in=30,
+            periods_until_investment=10,
+            possibilistic_max_models=8,
+            rolling_window_long=20,
+            rolling_window_short=10,
+        ),
         output_dir=output_dir,
     )
     ev.run_evaluation(folder, rf_series=None, rolling_window=10)

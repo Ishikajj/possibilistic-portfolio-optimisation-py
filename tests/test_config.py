@@ -65,21 +65,30 @@ def test_method_specific_defaults_come_from_config():
     assert p["n_jobs"].default == config.NECESSITY_N_JOBS
 
 
-def test_start_is_burn_in_plus_periods_until_investment_in_the_pipeline():
-    from possibilistic_portfolio import pipeline_wrapper as pw
+def test_pipeline_settings_default_to_config():
+    from possibilistic_portfolio.pipeline_wrapper import RunSettings
 
-    for fn in (
-        pw.calculate_all_functions_perdatasets,
-        pw.call_all_datasets,
-        pw.call_all_simulated_datasets,
-    ):
-        params = inspect.signature(fn).parameters
-        assert params["burn_in"].default == config.BURN_IN
-        assert (
-            params["periods_until_investment"].default
-            == config.PERIODS_UNTIL_INVESTMENT
-        )
-        assert params["merge_threshold"].default == config.MERGE_THRESHOLD
-        assert (
-            params["rolling_window_long"].default == config.ROLLING_WINDOW_LONG
-        )
+    s = RunSettings()
+    assert (s.burn_in, s.periods_until_investment, s.theta) == (
+        config.BURN_IN,
+        config.PERIODS_UNTIL_INVESTMENT,
+        config.THETA,
+    )
+    assert (s.rolling_window_long, s.rolling_window_short) == (
+        config.ROLLING_WINDOW_LONG,
+        config.ROLLING_WINDOW_SHORT,
+    )
+    assert s.bayesian_max_models == config.BAYESIAN_MAX_MODELS
+    assert s.possibilistic_max_models == config.POSSIBILISTIC_MAX_MODELS
+    assert (s.merge_threshold, s.nu_bandwidth, s.k_neighbours) == (
+        config.MERGE_THRESHOLD,
+        config.NU_BANDWIDTH,
+        config.K_NEIGHBOURS,
+    )
+    assert (s.gamma, s.eta, s.device) == (
+        config.NECESSITY_GAMMA,
+        config.NECESSITY_ETA,
+        config.NECESSITY_DEVICE,
+    )
+    # start = burn_in + periods_until_investment, for every strategy
+    assert RunSettings(burn_in=7, periods_until_investment=3).start == 10

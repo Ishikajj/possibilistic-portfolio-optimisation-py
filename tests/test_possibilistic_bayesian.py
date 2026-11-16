@@ -14,6 +14,7 @@ import pytest
 from possibilistic_portfolio import bayesian_averaging as ba
 from possibilistic_portfolio import possibilistic_bayesian as pb
 from possibilistic_portfolio.markowitz import markowitz_step
+from possibilistic_portfolio.predictive import StrategyOutput
 
 N = 3
 
@@ -323,8 +324,16 @@ def test_aggregate_mean_is_kappa_weighted():
 # --- run_core (necessity bypassed) ----------------------------------------
 
 
+def _fw(out: StrategyOutput) -> tuple[dict, pd.DataFrame]:
+    """(forecast, weights) of one weighting scheme."""
+    assert out.forecast is not None
+    return out.forecast, out.weights
+
+
 def test_run_core_outputs(no_necessity, returns):
-    diag, masked, w_m, power, w_p, exp, w_e = pb.run_core(returns, **RUN)
+    diag, outputs = pb.run_core(returns, **RUN)
+    assert list(outputs) == ["masked", "power", "exp"]
+    (masked, w_m), (power, w_p), (exp, w_e) = map(_fw, outputs.values())
     T = len(returns)
     assert masked["mu_hat"].shape == (T, N) and masked["sigma_hat"].shape == (
         T,
@@ -349,17 +358,17 @@ def test_run_core_outputs(no_necessity, returns):
 def test_run_core_covariances_symmetric_positive_definite(
     no_necessity, returns
 ):
-    _, masked, *_ = pb.run_core(returns, **RUN)
+    masked, _ = _fw(pb.run_core(returns, **RUN)[1]["masked"])
     for S in masked["sigma_hat"][40:]:
         assert np.allclose(S, S.T) and np.linalg.eigvalsh(S).min() > 0
 
 
 def test_run_core_uses_returns_up_to_t_only(no_necessity, returns):
     t = 100
-    _, a, *_ = pb.run_core(returns, **RUN)
+    a, _ = _fw(pb.run_core(returns, **RUN)[1]["masked"])
     changed = returns.copy()
     changed.iloc[t + 1 :] = 0.5
-    _, b, *_ = pb.run_core(changed, **RUN)
+    b, _ = _fw(pb.run_core(changed, **RUN)[1]["masked"])
     assert np.allclose(
         a["mu_hat"][: t + 1], b["mu_hat"][: t + 1], equal_nan=True
     )
@@ -370,16 +379,17 @@ def test_run_core_uses_returns_up_to_t_only(no_necessity, returns):
 
 def test_run_core_weights_start_at_start(no_necessity, returns):
     """Forecasts from burn_in (warm-up), weights only from start."""
-    _, masked, w_m, _, w_p, _, w_e = pb.run_core(returns, **RUN)
+    _, outputs = pb.run_core(returns, **RUN)
+    masked, _ = _fw(outputs["masked"])
     burn, start = RUN["burn_in"], RUN["start"]
     assert np.isfinite(masked["mu_hat"][burn:start]).all()
-    for w in (w_m, w_p, w_e):
+    for w in (o.weights for o in outputs.values()):
         assert w.iloc[:start].isna().all().all()
         assert w.iloc[start:-1].notna().all().all()
 
 
 def test_theta_reaches_the_weights(returns, no_necessity):
     """theta was ignored before (always 1): unconstrained weights scale 1/theta."""
-    _, _, w1, *_ = pb.run_core(returns, **RUN, theta=1.0)
-    _, _, w2, *_ = pb.run_core(returns, **RUN, theta=2.0)
+    w1 = pb.run_core(returns, **RUN, theta=1.0)[1]["masked"].weights
+    w2 = pb.run_core(returns, **RUN, theta=2.0)[1]["masked"].weights
     np.testing.assert_allclose(w2.to_numpy(), w1.to_numpy() / 2.0)

@@ -30,9 +30,9 @@ Entry point
 -----------
 run_core(returns_df, *, start, burn_in, theta, ...)
     Input : returns_df — pd.DataFrame of shape (T, n), numeric excess returns.
-    Output: (mu_sigma_dict, weights_df)
-        mu_sigma_dict — {"mu_hat": ndarray (T, n), "sigma_hat": ndarray (T, n, n)}
-        weights_df    — pd.DataFrame (T, n), Markowitz weights aligned to returns_df.index
+    Output: StrategyOutput(weights, forecast)  (predictive.py)
+        forecast — {"mu_hat": ndarray (T, n), "sigma_hat": ndarray (T, n, n), "index"}
+        weights  — pd.DataFrame (T, n), Markowitz weights aligned to returns_df.index
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ from possibilistic_portfolio.data_input import (
     prepare_returns,
 )
 from possibilistic_portfolio.markowitz import markowitz_unconstrained
-from possibilistic_portfolio.predictive import make_predictive
+from possibilistic_portfolio.predictive import StrategyOutput, make_predictive
 
 
 def sharing_prior_update(
@@ -371,7 +371,7 @@ def run_core(
     max_models: int | None = BAYESIAN_MAX_MODELS,
     prune_threshold: float = BAYESIAN_PRUNE_THRESHOLD,
     keep_newest: bool = KEEP_NEWEST,
-) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
+) -> StrategyOutput:
     """Run probabilistic Bayesian model averaging over NIW models.
 
     Input : returns_df — (T, n) numeric excess returns, no RF column.
@@ -457,7 +457,7 @@ def run_core(
     )
 
     # VERY IMPORTANT: the returned mu_hat_arr and sigma_hat_arr have info upto time t, meaning they are predicting t+1.
-    return mu_sigma_dict, weights
+    return StrategyOutput(weights, mu_sigma_dict)
 
 
 def main() -> None:
@@ -468,9 +468,10 @@ def main() -> None:
             start_date="2020-01-01",
         )
     )
-    predictives, weights = run_core(df, start=100, burn_in=100)
-    print(predictives["mu_hat"])
-    print(predictives["sigma_hat"])
+    forecast = run_core(df, start=100, burn_in=100).forecast
+    assert forecast is not None
+    print(forecast["mu_hat"])
+    print(forecast["sigma_hat"])
 
 
 if __name__ == "__main__":

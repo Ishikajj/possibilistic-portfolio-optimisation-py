@@ -47,9 +47,21 @@ def recorder(monkeypatch, tmp_path):
     """Replace the per-dataset run with a stub that records its inputs."""
     calls = []
 
-    def fake(dataset, dataset_name, output_dir=None, **params):
+    def fake(
+        dataset,
+        dataset_name,
+        *,
+        settings=None,
+        algorithms=None,
+        output_dir=None,
+    ):
         calls.append(
-            {"name": dataset_name, "data": dataset.copy(), "params": params}
+            {
+                "name": dataset_name,
+                "data": dataset.copy(),
+                "settings": settings,
+                "algorithms": algorithms,
+            }
         )
         folder = Path(output_dir or tmp_path) / dataset_name
         folder.mkdir(parents=True, exist_ok=True)
@@ -70,8 +82,8 @@ def test_real_loop_runs_value_and_equal_weighted_per_file(recorder, tmp_path):
         risk_free_path=_ff_file(tmp_path / "ff.csv"),
         start_date=None,
         output_dir=tmp_path / "out",
-        burn_in=7,
-        theta=2.0,
+        settings=pw.RunSettings(burn_in=7, theta=2.0),
+        algorithms=["bayesian_averaging"],
     )
     names = [c["name"] for c in recorder]
     assert names == [
@@ -89,10 +101,9 @@ def test_real_loop_runs_value_and_equal_weighted_per_file(recorder, tmp_path):
     rf = ev.load_rf(folders[0])
     assert rf.index.equals(vw.index) and np.allclose(rf, 0.001)
     assert np.allclose(vw["P1"], 0.009) and np.allclose(ew["P1"], 0.029)
-    assert (
-        recorder[0]["params"]["burn_in"] == 7
-        and recorder[0]["params"]["theta"] == 2.0
-    )
+    # settings and algorithm selection reach the per-dataset run
+    assert recorder[0]["settings"] == pw.RunSettings(burn_in=7, theta=2.0)
+    assert recorder[0]["algorithms"] == ["bayesian_averaging"]
 
 
 def test_real_loop_ignores_extra_tables(recorder, tmp_path):
@@ -191,6 +202,15 @@ def test_save_algo_outputs(tmp_path):
     assert back["index"].equals(dates)  # forecast keeps its dates
 
 
+# Small settings so the per-dataset run takes a second
+SMALL = pw.RunSettings(
+    burn_in=30,
+    periods_until_investment=10,
+    possibilistic_max_models=8,
+    rolling_window_long=20,
+    rolling_window_short=10,
+)
+
 PREDICTIVE = [
     "historical_expanding",
     "rolling_window_long",
@@ -219,11 +239,7 @@ def test_per_dataset_run_writes_expected_files(
     folder = pw.calculate_all_functions_perdatasets(
         data,
         "ds",
-        burn_in=30,
-        periods_until_investment=10,
-        max_models=8,
-        rolling_window_long=20,
-        rolling_window_short=10,
+        settings=SMALL,
         output_dir=tmp_path,
     )
     expected = {"returns.csv", "possibilistic_diagnostics.csv"}
@@ -260,11 +276,7 @@ def test_dates_reach_every_output(monkeypatch, tmp_path):
     folder = pw.calculate_all_functions_perdatasets(
         data,
         "ds",
-        burn_in=30,
-        periods_until_investment=10,
-        max_models=8,
-        rolling_window_long=20,
-        rolling_window_short=10,
+        settings=SMALL,
         output_dir=tmp_path,
     )
     assert ev.load_returns(folder).index.equals(dates)
@@ -273,3 +285,52 @@ def test_dates_reach_every_output(monkeypatch, tmp_path):
         assert w.index.equals(dates), algo
         if pred is not None:
             assert pred["index"].equals(dates), algo
+
+
+# --- algorithm registry and selection (P1) ---------------------------------
+
+
+def test_registry_lists_every_algorithm_in_run_order():
+    assert list(pw.ALGORITHMS) == [
+        "equal_weight",
+        "market_weight",
+        "minimum_variance",
+        "historical_expanding",
+        "rolling_window_long",
+        "rolling_window_short",
+        "jorion_bayes_stein",
+        "kan_zhou_three_fund",
+        "bayesian_averaging",
+        "possibilistic",
+    ]
+
+
+def test_selected_algorithms_write_only_their_files(tmp_path):
+    rng = np.random.default_rng(0)
+    data = pd.DataFrame(
+        rng.normal(0.0005, 0.01, (90, 3)), columns=["P1", "P2", "Mkt-RF"]
+    )
+    # given out of order: still run in registry order
+    folder = pw.calculate_all_functions_perdatasets(
+        data,
+        "ds",
+        settings=SMALL,
+        algorithms=["bayesian_averaging", "equal_weight"],
+        output_dir=tmp_path,
+    )
+    assert {p.name for p in folder.iterdir()} == {
+        "returns.csv",
+        "equal_weight_weights.csv",
+        "bayesian_averaging_weights.csv",
+        "bayesian_averaging_predictive.npz",
+        "bayesian_averaging_longonly_weights.csv",
+    }
+
+
+def test_unknown_algorithm_raises_before_writing(tmp_path):
+    data = pd.DataFrame({"P1": [0.01, 0.02]})
+    with pytest.raises(ValueError, match="available"):
+        pw.calculate_all_functions_perdatasets(
+            data, "ds", algorithms=["bayesian"], output_dir=tmp_path
+        )
+    assert not (tmp_path / "ds").exists()
