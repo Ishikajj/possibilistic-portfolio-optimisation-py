@@ -23,6 +23,11 @@ Deliberate differences from the FYP code (reference regenerated from post-fyp):
   turnover, rolling Sharpe changed. reference.npz still pre-fix.
 - 2026-11-16 Bayesian newborn prior divides by t / t-1 (was t-1 / t-2; P4).
   Only bayesian_averaging (+ long-only) changed, slightly.
+- 2026-11-16 common evaluation window: every strategy is scored from the
+  latest first weight row in the folder (`start`). Bayesian and possibilistic
+  forecasts start at `burn_in`, so their warm-up rows are no longer scored:
+  only their log_likelihood / mahalanobis columns (100 fewer valid rows, same
+  values otherwise) and avg_log_likelihood / avg_mahalanobis changed.
 
 When a result-changing fix lands on purpose, check that only the expected keys
 differ (run make_snapshots.py --compare), then regenerate the reference from the

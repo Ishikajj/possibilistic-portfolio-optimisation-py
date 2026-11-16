@@ -74,7 +74,8 @@ def test_load_returns_missing_folder_raises(tmp_path):
 def test_scalar_metrics_wire_up_the_metric_functions(run_folder, rf):
     returns = ev.load_returns(run_folder)
     w, pred = ev.load_strategy_outputs(run_folder, "model")
-    out = ev.compute_scalar_metrics(returns, w, pred, rf, theta=2.0)
+    data = ev.StrategyData(returns, w, pred, rf, theta=2.0)
+    out = ev.compute_metrics(data)["scalars"]
     assert np.isclose(
         out["sharpe"], calculate_sharpe_ratio(returns, w, ev.SCALING_FACTOR)
     )  # daily
@@ -93,7 +94,7 @@ def test_scalar_metrics_wire_up_the_metric_functions(run_folder, rf):
 def test_scalar_metrics_without_rf_or_predictives_are_nan(run_folder):
     returns = ev.load_returns(run_folder)
     w, _ = ev.load_strategy_outputs(run_folder, "equal_weight")
-    out = ev.compute_scalar_metrics(returns, w)
+    out = ev.compute_metrics(ev.StrategyData(returns, w))["scalars"]
     assert np.isnan(out["ceq"])
     assert np.isnan(out["avg_log_likelihood"]) and np.isnan(
         out["avg_mahalanobis"]
@@ -123,14 +124,33 @@ def test_run_evaluation_writes_all_files(run_folder, rf):
         ]
 
 
+def test_select_strategies_and_metrics(run_folder, rf):
+    results = ev.run_evaluation(
+        run_folder,
+        rf_series=rf,
+        strategies=["model"],
+        metrics=["sharpe", "log_likelihood"],
+    )
+    assert set(results) == {"model"}
+    assert list(results["model"]["scalars"]) == ["sharpe"]
+    assert list(results["model"]["series"]) == ["log_likelihood"]
+    assert not (run_folder / "rolling_sharpe.csv").exists()
+    with pytest.raises(ValueError, match="available"):
+        ev.run_evaluation(run_folder, strategies=["ghost"])
+    with pytest.raises(ValueError, match="available"):
+        ev.run_evaluation(run_folder, metrics=["sortino"])
+
+
 def test_one_broken_strategy_does_not_stop_the_rest(run_folder, rf, capsys):
     (run_folder / "broken_weights.csv").write_text("not,a\nweights,file\n")
     results = ev.evaluate_all_strategies(run_folder, rf)
     assert results["broken"] == {"scalars": {}, "series": {}}
     assert results["model"]["scalars"]
     assert "WARNING" in capsys.readouterr().out
-    scalars = ev.scalars_to_dataframe(results)
-    assert "broken" not in scalars.index  # silently dropped from scalars.csv
+    ev.save_evaluation_results(results, run_folder)
+    scalars = pd.read_csv(run_folder / "scalars.csv", index_col=0)
+    assert scalars.loc["broken"].isna().all()  # kept as an all-NaN row
+    assert scalars.loc["model"].notna().any()
 
 
 def test_metric_warnings_are_tagged_with_strategy_name(run_folder):
@@ -158,7 +178,7 @@ def test_weights_with_other_dates_are_refused(run_folder):
     w.to_csv(run_folder / "shifted_weights.csv")
     returns = ev.load_returns(run_folder)
     with pytest.raises(ValueError, match="does not match returns.csv"):
-        ev.evaluate_strategy(returns, run_folder, "shifted")
+        ev.load_strategy_outputs(run_folder, "shifted", returns.index)
 
 
 def test_load_rf_by_date_by_row_and_legacy(tmp_path):
@@ -186,3 +206,47 @@ def test_dates_in_returns_csv_are_read_back_as_dates(tmp_path):
         tmp_path / "returns.csv"
     )
     assert ev.load_returns(tmp_path).index.equals(dates)
+
+
+# ── common evaluation window ─────────────────────────────────────────────────
+
+
+def test_forecast_rows_before_the_window_are_not_scored(run_folder):
+    """A forecast that starts earlier than the weights (BMA / PMA warm-up)
+    is only scored from the common start, like the benchmarks."""
+    mu = np.load(run_folder / "model_mus.npy")
+    sigma = np.load(run_folder / "model_sigmas.npy")
+    mu[3:10], sigma[3:10] = 0.001, 1e-4 * np.eye(N)  # warm-up forecasts
+    np.save(run_folder / "model_mus.npy", mu)
+    np.save(run_folder / "model_sigmas.npy", sigma)
+
+    ll = ev.evaluate_all_strategies(run_folder)["model"]["series"][
+        "log_likelihood"
+    ]
+    assert ll.first_valid_index() == 11  # forecast at 10 scores return at 11
+
+
+def test_late_strategy_moves_the_window_and_is_named(run_folder):
+    w = pd.read_csv(run_folder / "equal_weight_weights.csv", index_col=0)
+    w.iloc[:30] = np.nan
+    w.to_csv(run_folder / "late_weights.csv")
+    with pytest.warns(RuntimeWarning, match=r"start later: late \(from 30\)"):
+        results = ev.evaluate_all_strategies(run_folder, strategies=["model"])
+    # the window comes from every strategy in the folder, not only "model"
+    ll = results["model"]["series"]["log_likelihood"]
+    assert ll.first_valid_index() == 31
+
+
+def test_strategy_without_weights_is_left_out_of_the_window(run_folder):
+    w = pd.read_csv(run_folder / "equal_weight_weights.csv", index_col=0)
+    (w * np.nan).to_csv(run_folder / "empty_weights.csv")
+    with pytest.warns(RuntimeWarning, match="empty has no weights"):
+        results = ev.evaluate_all_strategies(run_folder)
+    ll = results["model"]["series"]["log_likelihood"]
+    assert ll.first_valid_index() == 11  # window unchanged
+
+
+def test_window_raises_when_no_strategy_has_weights():
+    w = pd.DataFrame(np.nan, index=range(5), columns=["a"])
+    with pytest.raises(ValueError, match="No strategy has any weights"):
+        ev.evaluation_start({"x": w})

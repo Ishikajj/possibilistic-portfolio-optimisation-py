@@ -16,27 +16,22 @@ After evaluation the same folder also receives:
   log_likelihood.csv           ← time-indexed, predictive algos only
   mahalanobis.csv              ← time-indexed, predictive algos only
 
-Module layout
--------------
-load_returns               -- read returns.csv from a dataset folder
-load_rf                    -- read the risk-free series for a dataset folder
-load_strategy_outputs      -- read weights + optional forecast for one algo
-discover_strategies        -- list every algo saved in a folder
-compute_scalar_metrics     -- sharpe, CEQ, avg log-likelihood, avg mahalanobis
-compute_series_metrics     -- rolling sharpe, LL series, mahalanobis series
-evaluate_strategy          -- load + compute all metrics for one algo
-evaluate_all_strategies    -- run evaluate_strategy over every algo in a folder
-scalars_to_dataframe       -- tidy scalar results into a DataFrame
-save_evaluation_results    -- write all CSVs back into the dataset folder
-run_evaluation             -- end-to-end: load → evaluate → save
+All strategies are scored over one common window: from the latest first
+weight row in the folder (see ``evaluation_start``).
+
+Entry point: ``run_evaluation(folder, rf_series=load_rf(folder))``.
 """
 
 from __future__ import annotations
 
 import sys
 import warnings
+from collections.abc import Callable
+from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -107,166 +102,198 @@ def load_rf(
 def load_strategy_outputs(
     folder: Path | str,
     algo_name: str,
+    index: pd.Index | None = None,
 ) -> tuple[pd.DataFrame, dict | None]:
-    """Load saved weights and, if available, predictive moments for one algorithm.
+    """Load saved weights and, if available, the forecast for one algorithm.
 
-    Returns
-    -------
-    weights_df : pd.DataFrame
-    mu_sigma_dict : dict or None
-        Forecast dict (``predictive.load_predictive``), or ``None`` for
-        weight-only algorithms.
+    Returns ``(weights_df, forecast)``; ``forecast`` is the dict from
+    ``predictive.load_predictive``, or ``None`` for weight-only algorithms.
+    With ``index`` given (the returns' index), weights with a different
+    index raise.
     """
-    folder = Path(folder)
+    return _load_weights(folder, algo_name, index), load_predictive(
+        folder, algo_name
+    )
 
-    weights_path = folder / f"{algo_name}_weights.csv"
+
+def _load_weights(
+    folder: Path | str, algo_name: str, index: pd.Index | None = None
+) -> pd.DataFrame:
+    weights_path = Path(folder) / f"{algo_name}_weights.csv"
     if not weights_path.exists():
         raise FileNotFoundError(f"Weights file not found: {weights_path}")
-    return _read_indexed_csv(weights_path), load_predictive(folder, algo_name)
+    weights_df = _read_indexed_csv(weights_path)
+    if index is not None and not weights_df.index.equals(index):
+        raise ValueError(
+            f"{algo_name}_weights.csv index does not match returns.csv"
+        )
+    return weights_df
 
 
 def discover_strategies(folder: Path | str) -> list[str]:
-    """Return a sorted list of algorithm names saved in ``folder``.
-
-    Scans for ``*_weights.csv`` files and strips the suffix.
-    """
+    """Sorted algorithm names in ``folder`` (``*_weights.csv``, suffix stripped)."""
     return sorted(
         p.name.replace("_weights.csv", "")
         for p in Path(folder).glob("*_weights.csv")
     )
 
 
-# ── 2. Metric computation ─────────────────────────────────────────────────────
+# ── 2. Metrics ────────────────────────────────────────────────────────────────
 
 
-def compute_scalar_metrics(
-    returns_df: pd.DataFrame,
-    weights_df: pd.DataFrame,
-    mu_sigma_dict: dict | None = None,
-    rf_series: pd.Series | None = None,
-    theta: float = 1.0,
-) -> dict:
-    """Compute all scalar performance metrics for one strategy.
+@dataclass
+class StrategyData:
+    """Everything a metric needs for one strategy.
 
-    Always computed
-    ---------------
-    sharpe            Sharpe ratio, scaled by config.SCALING_FACTOR (1 = daily)
-
-    Requires ``rf_series``
-    ----------------------
-    ceq               certainty equivalent (mean-variance utility)
-
-    Requires ``mu_sigma_dict``
-    --------------------------
-    avg_log_likelihood    mean multivariate Gaussian log-likelihood
-    avg_mahalanobis       mean Mahalanobis distance (unsquared)
-
-    Missing prerequisites produce NaN rather than raising.
+    The log-likelihood and Mahalanobis series are computed on first use and
+    cached, so the series metrics and their averages share one computation.
+    Both are ``None`` without a forecast.
     """
-    results: dict = {}
 
-    results["sharpe"] = calculate_sharpe_ratio(
-        returns_df, weights_df, scaling_factor=SCALING_FACTOR
-    )
+    returns: pd.DataFrame
+    weights: pd.DataFrame
+    forecast: dict | None = None
+    rf: pd.Series | None = None
+    theta: float = 1.0
+    rolling_window: int = _ROLLING_WINDOW
 
-    if rf_series is not None:
-        results["ceq"] = certainty_equivalent(
-            returns_df, weights_df, rf_series, theta=theta
-        )
-    else:
-        results["ceq"] = float("nan")
+    @cached_property
+    def log_likelihood(self) -> pd.Series | None:
+        if self.forecast is None:
+            return None
+        return multivariate_log_likelihood_series(self.returns, self.forecast)
 
-    if mu_sigma_dict is not None:
-        ll = multivariate_log_likelihood_series(
-            returns_df, mu_sigma_dict
-        ).dropna()
-        results["avg_log_likelihood"] = (
-            float(ll.mean()) if not ll.empty else float("nan")
-        )
-        mah = mahalanobis_distance_series(returns_df, mu_sigma_dict).dropna()
-        results["avg_mahalanobis"] = (
-            float(mah.mean()) if not mah.empty else float("nan")
-        )
-    else:
-        results["avg_log_likelihood"] = float("nan")
-        results["avg_mahalanobis"] = float("nan")
-
-    results["avg_turnover"] = average_turnover(
-        weights_df, scaling_factor=SCALING_FACTOR
-    )
-
-    return results
+    @cached_property
+    def mahalanobis(self) -> pd.Series | None:
+        if self.forecast is None:
+            return None
+        return mahalanobis_distance_series(self.returns, self.forecast)
 
 
-def compute_series_metrics(
-    returns_df: pd.DataFrame,
-    weights_df: pd.DataFrame,
-    mu_sigma_dict: dict | None = None,
-    rolling_window: int = _ROLLING_WINDOW,
-) -> dict:
-    """Compute all time-series performance metrics for one strategy.
+def _mean(series: pd.Series | None) -> float:
+    return float("nan") if series is None else float(series.dropna().mean())
 
-    Always computed
-    ---------------
-    rolling_sharpe            rolling Sharpe over ``rolling_window`` days, scaled by config.SCALING_FACTOR
 
-    Requires ``mu_sigma_dict``
-    --------------------------
-    log_likelihood_series     period-by-period log-likelihood (or None)
-    mahalanobis_series        period-by-period Mahalanobis distance (or None)
-    """
-    results: dict = {}
+# Each metric: name -> function of StrategyData. A missing prerequisite gives
+# NaN (scalars) or None (series: no column for that strategy). To add a
+# metric, add an entry; scalars.csv columns follow this order.
+SCALAR_METRICS: dict[str, Callable[[StrategyData], float]] = {
+    "sharpe": lambda d: calculate_sharpe_ratio(
+        d.returns, d.weights, scaling_factor=SCALING_FACTOR
+    ),
+    "ceq": lambda d: (
+        float("nan")
+        if d.rf is None
+        else certainty_equivalent(d.returns, d.weights, d.rf, theta=d.theta)
+    ),
+    "avg_log_likelihood": lambda d: _mean(d.log_likelihood),
+    "avg_mahalanobis": lambda d: _mean(d.mahalanobis),  # unsquared
+    "avg_turnover": lambda d: average_turnover(
+        d.weights, scaling_factor=SCALING_FACTOR
+    ),
+}
 
-    results["rolling_sharpe"] = rolling_sharpe_ratio(
-        returns_df,
-        weights_df,
-        window=rolling_window,
+# One <name>.csv each, one column per strategy that has the series.
+SERIES_METRICS: dict[str, Callable[[StrategyData], pd.Series | None]] = {
+    "rolling_sharpe": lambda d: rolling_sharpe_ratio(
+        d.returns,
+        d.weights,
+        window=d.rolling_window,
         scaling_factor=SCALING_FACTOR,
-    )
-
-    if mu_sigma_dict is not None:
-        results["log_likelihood_series"] = multivariate_log_likelihood_series(
-            returns_df, mu_sigma_dict
-        )
-        results["mahalanobis_series"] = mahalanobis_distance_series(
-            returns_df, mu_sigma_dict
-        )
-    else:
-        results["log_likelihood_series"] = None
-        results["mahalanobis_series"] = None
-
-    return results
+    ),
+    "log_likelihood": lambda d: d.log_likelihood,
+    "mahalanobis": lambda d: d.mahalanobis,
+}
 
 
-# ── 3. Per-strategy and whole-folder evaluation ───────────────────────────────
+def _select(
+    requested: list[str] | None, available: list[str], what: str
+) -> list[str]:
+    """``requested`` filtered from ``available`` (keeps ``available`` order);
+    ``None`` = all. Unknown names raise, listing what is available."""
+    if requested is None:
+        return list(available)
+    unknown = [r for r in requested if r not in available]
+    if unknown:
+        raise ValueError(f"Unknown {what} {unknown}; available: {available}")
+    return [a for a in available if a in requested]
 
 
-def evaluate_strategy(
-    returns_df: pd.DataFrame,
-    folder: Path | str,
-    algo_name: str,
-    rf_series: pd.Series | None = None,
-    theta: float = 1.0,
-    rolling_window: int = _ROLLING_WINDOW,
+def compute_metrics(
+    data: StrategyData, metrics: list[str] | None = None
 ) -> dict:
-    """Load and fully evaluate one saved strategy.
+    """``{"scalars": {...}, "series": {...}}`` for one strategy.
 
-    Returns
-    -------
-    dict with keys ``"scalars"`` and ``"series"``.
+    ``metrics``: names from SCALAR_METRICS / SERIES_METRICS (``None`` = all).
     """
-    weights_df, mu_sigma_dict = load_strategy_outputs(folder, algo_name)
-    if not weights_df.index.equals(returns_df.index):
-        raise ValueError(
-            f"{algo_name}_weights.csv index does not match returns.csv"
+    names = _select(metrics, [*SCALAR_METRICS, *SERIES_METRICS], "metric")
+    series = {n: SERIES_METRICS[n](data) for n in names if n in SERIES_METRICS}
+    return {
+        "scalars": {
+            n: SCALAR_METRICS[n](data) for n in names if n in SCALAR_METRICS
+        },
+        "series": {n: s for n, s in series.items() if s is not None},
+    }
+
+
+# ── 3. Common evaluation window ───────────────────────────────────────────────
+
+
+def evaluation_start(weights: dict[str, pd.DataFrame]) -> int:
+    """Row position where the common evaluation window starts.
+
+    Every strategy is scored over the same days: from the latest first
+    weight row among ``weights`` (normally ``start`` for all of them).
+    Guards against one broken strategy silently cutting the window:
+    - a strategy with no weights at all is left out, with a warning;
+    - strategies starting later than the earliest are named in a warning.
+    Raises if no strategy has weights.
+    """
+    first: dict[str, int] = {}
+    for name, w in weights.items():
+        rows = np.flatnonzero(w.notna().any(axis=1).to_numpy())
+        if rows.size:
+            first[name] = int(rows[0])
+        else:
+            warnings.warn(
+                f"{name} has no weights; left out of the common evaluation "
+                "window",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+    if not first:
+        raise ValueError("No strategy has any weights")
+    earliest, start = min(first.values()), max(first.values())
+    if start > earliest:
+        index = next(iter(weights.values())).index
+        late = ", ".join(
+            f"{n} (from {index[r]})" for n, r in first.items() if r > earliest
         )
-    scalars = compute_scalar_metrics(
-        returns_df, weights_df, mu_sigma_dict, rf_series, theta
-    )
-    series = compute_series_metrics(
-        returns_df, weights_df, mu_sigma_dict, rolling_window
-    )
-    return {"scalars": scalars, "series": series}
+        warnings.warn(
+            f"Common evaluation window starts at {index[start]} instead of "
+            f"{index[earliest]}, because these strategies start later: {late}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return start
+
+
+def _from_row(
+    weights_df: pd.DataFrame, forecast: dict | None, start: int
+) -> tuple[pd.DataFrame, dict | None]:
+    """Copies with weights and forecast rows before ``start`` set to NaN,
+    so no metric uses them (forecast row t scores the return at t+1)."""
+    weights_df = weights_df.copy()
+    weights_df.iloc[:start] = np.nan
+    if forecast is not None:
+        forecast = dict(forecast)
+        for key in ("mu_hat", "sigma_hat"):
+            forecast[key] = forecast[key].copy()
+            forecast[key][:start] = np.nan
+    return weights_df, forecast
+
+
+# ── 4. Whole-folder evaluation ────────────────────────────────────────────────
 
 
 def evaluate_all_strategies(
@@ -274,26 +301,49 @@ def evaluate_all_strategies(
     rf_series: pd.Series | None = None,
     theta: float = 1.0,
     rolling_window: int = _ROLLING_WINDOW,
+    strategies: list[str] | None = None,
+    metrics: list[str] | None = None,
 ) -> dict[str, dict]:
-    """Load returns and evaluate every strategy saved in ``folder``.
+    """Evaluate the strategies saved in ``folder`` against its returns.csv.
 
-    Loads ``returns.csv`` automatically from ``folder``, then calls
-    :func:`evaluate_strategy` for every algo discovered there.
+    ``strategies`` / ``metrics``: names to evaluate (``None`` = all); unknown
+    names raise. A strategy that fails is printed as a warning and returns
+    empty results; the others carry on.
 
-    Returns
-    -------
-    results : dict[str, dict]
-        ``{algo_name: {"scalars": {...}, "series": {...}}}``
+    All strategies are scored over one common window (``evaluation_start``,
+    computed from every strategy in the folder, not only the selected
+    ones): weights and forecasts before it are ignored.
+
+    Returns ``{algo_name: {"scalars": {...}, "series": {...}}}``.
     """
     folder = Path(folder)
     returns_df = load_returns(folder)
-    strategies = discover_strategies(folder)
-
-    if not strategies:
+    available = discover_strategies(folder)
+    if not available:
         raise ValueError(f"No *_weights.csv files found in {folder}")
+    selected = _select(strategies, available, "strategy")
+    _select(metrics, [*SCALAR_METRICS, *SERIES_METRICS], "metric")  # fail early
+
+    weights: dict[str, pd.DataFrame] = {}
+    load_errors: dict[str, Exception] = {}
+    for algo_name in available:
+        try:
+            weights[algo_name] = _load_weights(
+                folder, algo_name, returns_df.index
+            )
+        except Exception as exc:
+            load_errors[algo_name] = exc
+            warnings.warn(
+                f"{algo_name} could not be loaded ({exc}); left out of the "
+                "common evaluation window",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+    start = evaluation_start(weights)
+    print(f"  Common evaluation window from {returns_df.index[start]}")
 
     results: dict[str, dict] = {}
-    for algo_name in strategies:
+    for algo_name in selected:
         print(f"  Evaluating {algo_name}...")
         # Catch warnings from the metric functions and re-raise them tagged
         # with the strategy name (also stops Python showing identical
@@ -301,14 +351,22 @@ def evaluate_all_strategies(
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             try:
-                results[algo_name] = evaluate_strategy(
+                if algo_name in load_errors:
+                    raise load_errors[algo_name]
+                weights_df, forecast = _from_row(
+                    weights[algo_name],
+                    load_predictive(folder, algo_name),
+                    start,
+                )
+                data = StrategyData(
                     returns_df,
-                    folder,
-                    algo_name,
+                    weights_df,
+                    forecast,
                     rf_series,
                     theta,
                     rolling_window,
                 )
+                results[algo_name] = compute_metrics(data, metrics)
             except Exception as exc:
                 print(f"  [WARNING] {algo_name} failed: {exc}")
                 results[algo_name] = {"scalars": {}, "series": {}}
@@ -320,67 +378,35 @@ def evaluate_all_strategies(
     return results
 
 
-# ── 4. Results formatting and persistence ─────────────────────────────────────
-
-
-def scalars_to_dataframe(all_results: dict[str, dict]) -> pd.DataFrame:
-    """Convert scalar metrics to a tidy DataFrame.
-
-    Rows = strategies, columns = metric names.
-    """
-    rows = {
-        algo: result["scalars"]
-        for algo, result in all_results.items()
-        if result.get("scalars")
-    }
-    return pd.DataFrame(rows).T
+# ── 5. Saving ─────────────────────────────────────────────────────────────────
 
 
 def save_evaluation_results(
     all_results: dict[str, dict],
     folder: Path | str,
-) -> None:  # writes CSVs, no return value
-    """Write all evaluation outputs back into the dataset folder.
-
-    Files written
-    -------------
-    scalars.csv           one row per strategy, one col per scalar metric
-    rolling_sharpe.csv    time-indexed, one col per strategy
-    log_likelihood.csv    time-indexed, predictive strategies only
-    mahalanobis.csv       time-indexed, predictive strategies only
+) -> None:
+    """Write ``scalars.csv`` (one row per strategy) and one ``<name>.csv``
+    per series metric (one column per strategy that has it) into ``folder``.
+    A strategy that failed (empty results) gets an all-NaN row in
+    ``scalars.csv``, so it shows up as missing, and no series columns.
     """
     folder = Path(folder)
+    scalars = {a: r["scalars"] for a, r in all_results.items()}
+    pd.DataFrame(scalars).T.reindex(list(scalars)).to_csv(
+        folder / "scalars.csv"
+    )
 
-    scalars_to_dataframe(all_results).to_csv(folder / "scalars.csv")
-
-    rolling = {
-        algo: res["series"]["rolling_sharpe"]
-        for algo, res in all_results.items()
-        if res.get("series") and res["series"].get("rolling_sharpe") is not None
-    }
-    if rolling:
-        pd.DataFrame(rolling).to_csv(folder / "rolling_sharpe.csv")
-
-    ll = {
-        algo: res["series"]["log_likelihood_series"]
-        for algo, res in all_results.items()
-        if res.get("series")
-        and res["series"].get("log_likelihood_series") is not None
-    }
-    if ll:
-        pd.DataFrame(ll).to_csv(folder / "log_likelihood.csv")
-
-    mah = {
-        algo: res["series"]["mahalanobis_series"]
-        for algo, res in all_results.items()
-        if res.get("series")
-        and res["series"].get("mahalanobis_series") is not None
-    }
-    if mah:
-        pd.DataFrame(mah).to_csv(folder / "mahalanobis.csv")
+    names = dict.fromkeys(n for r in all_results.values() for n in r["series"])
+    for name in names:
+        cols = {
+            a: r["series"][name]
+            for a, r in all_results.items()
+            if name in r["series"]
+        }
+        pd.DataFrame(cols).to_csv(folder / f"{name}.csv")
 
 
-# ── 5. End-to-end entry point ─────────────────────────────────────────────────
+# ── 6. End-to-end entry point ─────────────────────────────────────────────────
 
 
 def run_evaluation(
@@ -388,37 +414,29 @@ def run_evaluation(
     rf_series: pd.Series | None = None,
     theta: float = 1.0,
     rolling_window: int = _ROLLING_WINDOW,
+    strategies: list[str] | None = None,
+    metrics: list[str] | None = None,
 ) -> dict[str, dict]:
-    """Load, evaluate, and save results for every strategy in ``folder``.
-
-    This is the single call needed after ``calculate_all_functions_perdatasets``
-    has been run.  It reads ``returns.csv`` from the folder, evaluates all
-    saved strategies, saves the four output CSVs back into the same folder,
-    and returns the full results dict.
+    """Evaluate the strategies in a run folder and save the CSVs back into it.
 
     Parameters
     ----------
-    folder : Path or str
-        Self-contained dataset folder produced by the pipeline.
-    rf_series : pd.Series, optional
-        Daily risk-free rate aligned to the returns index.  Required for CEQ;
-        pass ``None`` to skip CEQ (it will appear as NaN in the output).
-    theta : float
-        Risk-aversion parameter for CEQ.
-    rolling_window : int
-        Look-back window for rolling Sharpe (default 150 days).
+    folder : run folder made by ``calculate_all_functions_perdatasets``.
+    rf_series : daily risk-free rate, matched to returns.csv by index
+        (``load_rf(folder)``). Needed for CEQ; ``None`` → CEQ is NaN.
+    theta : risk aversion for CEQ.
+    rolling_window : rolling Sharpe window in days (default 252).
+    strategies, metrics : names to evaluate (``None`` = all); see
+        ``discover_strategies`` and SCALAR_METRICS / SERIES_METRICS.
 
-    Returns
-    -------
-    results : dict[str, dict]
-        Full results as returned by :func:`evaluate_all_strategies`.
+    Returns the results dict of :func:`evaluate_all_strategies`.
     """
     folder = Path(folder)
     print(f"\nEvaluating: {folder.name}")
-
-    results = evaluate_all_strategies(folder, rf_series, theta, rolling_window)
+    results = evaluate_all_strategies(
+        folder, rf_series, theta, rolling_window, strategies, metrics
+    )
     save_evaluation_results(results, folder)
-
     print(f"  Results saved to: {folder}")
     return results
 

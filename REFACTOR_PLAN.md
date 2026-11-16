@@ -12,8 +12,7 @@ Nothing gets changed without a yes.
    "historical" truly expanding, possibilistic start row (2.9), P4 decided.
 2. Every remaining Part 2 section done to its agreed points (2.5–2.11).
    Nothing new is added unless it's a bug.
-3. Dead code decided: necessity + `necessity_archive/`, and possibilistic's
-   future given the move to Bayesian averaging.
+3. Dead code decided: necessity + `necessity_archive/`.
 4. `TOOLING_TODO.md` has nothing open under Primary; the rest is marked "after
    the paper".
 5. One full rerun on the cleaned code, snapshot reference regenerated: the
@@ -188,11 +187,11 @@ Structure cleanup (2026-11-16, 174 → 114 lines, snapshot bit for bit):
 - [x] `average_log_likelihood` removed (2026-11-16): the pipeline averages the log-lik series with `.dropna().mean()`, the same way it already did Mahalanobis.
 - [x] `_gaussian_terms` shortened: NaN check, symmetrising and `slogdet` on all rows at once; `solve` stays per row (a batched solve differs in the last bit on 11-asset data). "linear algebra error" reason gone (`slogdet` and `solve` share the LU, so `sign > 0` can't fail in `solve`). Bit for bit.
 - [x] (done 2026-11-16, forecasts now carry `index` and are checked) **Date index change touches this file** (with the 2.3 date item): the 1-day shift stays (forecast at t−1 scores the return at t) and so does `rows = flatnonzero(ok)[good] + 1` (positions in the shifted arrays → return rows). Output Series take `returns_df.index`, so they become date-indexed for free. `mu_hat` / `sigma_hat` (`.npy`) have no index and are matched to returns **by position**, guarded only by the shape check → when dates go in, save / check the forecast dates too (test: forecast row t belongs to return date t).
-- [~] → 2.11: scoring still runs 4× per strategy (avg log-lik, avg Mahalanobis, then both series again) → compute each series once, average for `scalars.csv`.
+- [x] (done in 2.11, 2026-11-16) scoring still runs 4× per strategy (avg log-lik, avg Mahalanobis, then both series again) → compute each series once, average for `scalars.csv`.
 
 Edge-case notes:
 - [x] Invalid Σ (non-positive determinant, singular) → row silently skipped, so it's left out of the average with no count. → Now one `RuntimeWarning` with counts per reason (NaN rows before investment not counted) (2026-11-16). FYP results: 0 such rows in all 20 datasets × 9 predictive strategies. (Regularization since removed, see below.)
-- [~] Each strategy is averaged over its own valid rows (ties in with the possibilistic row-500 bug). → 2.11 (common evaluation window is an evaluation decision).
+- [x] (done in 2.11, 2026-11-16: common evaluation window) Each strategy is averaged over its own valid rows (ties in with the possibilistic row-500 bug). → 2.11 (common evaluation window is an evaluation decision).
 - [x] Scoring is Gaussian even though NIW predictives are Student-t — kept (same rule for all strategies; benchmarks have no t predictive); module docstring says so (2026-11-16).
 - [x] Default `regularization=1e-10` was added to Σ before scoring → **removed** (2026-11-16): a singular / non-PD Σ makes the row invalid (NaN, counted in the warning) instead of being scored on ε·I (extreme values that can dominate an average). Not negligible: VW benchmark Σ have smallest eigenvalues down to ~1e-9, so FYP avg log-lik moves in the 2nd decimal (e.g. 10-Industry VW rolling-short 42.4805 → 42.4662), no rows lost, no ranking change; Bayesian / possibilistic unchanged (min eigenvalue ≥ 1e-6). Snapshot reference regenerated (log-lik / Mahalanobis keys only).
 
@@ -221,7 +220,9 @@ Edge-case notes:
 ### 2.7 `bayesian_averaging.py` — [x] tests drafted 2026-11-13
 Tests (`tests/test_bayesian_averaging.py`, 15 passing): **marginal likelihood == NIW predictive Student-t (`scipy.stats.multivariate_t`)**, invalid scale → −inf, NIW conjugate update, in-place update of all models, newborn model uses the common prior, sharing prior (2-model case, sums to 1, α=0 means no sharing, first model), probability update == Bayes' rule and stable with extreme likelihoods, BMA moments == mixture mean/covariance, pruning (threshold, renormalise, cap keeps the most probable + newest), `run_core` shapes / NaN layout / weights == Markowitz, Σ̂ symmetric PD, **no look-ahead** (changing returns after t leaves predictions up to t unchanged).
 Correction: `sharing_prior_update` IS used (called every step in `run_core`); earlier "unused helper" remark was wrong.
-Existing TODO: P3 (θ, `max_models` not passed), P4 (`t-1`/`t-2` denominators in `_new_model_prior`, on hold).
+Existing TODO: P3 (θ, `max_models` not passed). P4 (`t-1`/`t-2` denominators in `_new_model_prior`) fixed 2026-11-16 (`2c8a4e8`).
+
+- [ ] **Duplication (with 2.9):** `_new_model_prior`, `_update_niw`, `_update_all_models` are exact copies in `bayesian_averaging.py` and `possibilistic_bayesian.py` (tested identical / same results). Keep one copy and import it in the other. Decided 2026-11-16: a small shared module (e.g. `niw.py`) that both import — possibilistic is the core of the project, so neither method should depend on the other. The burn-in setup of `sum_R` / `sum_R2` in both `run_core`s is duplicated too. Values must stay bit for bit.
 
 Edge-case notes:
 - [?] `burn_obs = min(burn_in, T // 2)` silently shortens the burn-in on short data (same as possibilistic).
@@ -238,6 +239,7 @@ Tests (`tests/test_possibilistic_bayesian.py`, 21 passing + 3 xfail = logged bug
 Bugs (TOOLING_TODO, xfail tests): ~~weights start at row 500 not 1000~~ fixed 2026-11-16; `keep_newest` pruning evicts the wrong model (also Bayesian); Mahalanobis merge distance √2 off (only `results_cpu` used it).
 
 Edge-case notes:
+- [ ] **Duplication (with 2.7):** `_new_model_prior`, `_update_niw`, `_update_all_models` are exact copies of the Bayesian ones → one shared module (see 2.7).
 - [?] Merging floors ν at n+2, but newborn possibilistic models start at ν=1 → merging two young models jumps ν up.
 - [?] Merge diagnostic `hellinger_avg` is the average from the *last* merge pass only (reset each pass).
 - [?] Hellinger returns 1.0 (max distance) on numerical failure, silently.
@@ -255,24 +257,24 @@ Edge-case notes:
 - [?] Default parameters differ between the three functions (e.g. `merge_threshold` 0.01 vs 0.15, `periods_until_investment` 1, `rolling_window_long` 250 vs 252 in `main`) → `config.py`.
 - [?] Real-data loop catches every loading exception and prints a warning → a typo in a path just skips that dataset.
 
-### 2.11 `evaluation_pipeline.py` — [x] tests drafted 2026-11-13
+### 2.11 `evaluation_pipeline.py` — [x] done 2026-11-16 (tests drafted 2026-11-13)
 Tests (`tests/test_evaluation_pipeline.py`, 8 passing; fake run folder): strategy discovery (incl. `*_longonly`), loading weights ± predictives, missing files raise, scalar metrics == the metric functions (Sharpe daily, CE, log-lik), NaN when RF / predictives missing, `run_evaluation` writes `scalars.csv` (5 columns), `rolling_sharpe.csv`, and `log_likelihood.csv` / `mahalanobis.csv` for predictive strategies only, one broken strategy doesn't stop the rest, empty folder raises.
 ~~Existing TODO: `__main__` RF loading (`rf.csv` without Date → KeyError; real data re-derives RF from its own `START_DATE`).~~ Fixed 2026-11-16 with the date index: `load_rf(folder)`, tested.
 
 - [x] (2026-11-15) `evaluate_all_strategies` catches each strategy's warnings and shows them again tagged `[algo_name]` (so identical messages from different strategies aren't collapsed into one by Python). Test added.
-- [ ] From 2.4: compute the log-likelihood / Mahalanobis series once per strategy (now 4 passes) and average them. Add the Sharpe-difference test (`compare_to_benchmark`) to the outputs (TOOLING_TODO).
-- [ ] From 2.4: each strategy is averaged over its own valid rows → decide on a common evaluation window across strategies (different start rows, e.g. possibilistic row-500 bug).
-- [ ] **Duplication / flexibility** (~1–1.5 h, agreed 2026-11-15):
+- [x] (2026-11-16) From 2.4: compute the log-likelihood / Mahalanobis series once per strategy (now 4 passes) and average them. Done: `StrategyData` caches both series, the scalars are their means. ~~Add the Sharpe-difference test to the outputs~~ → decided 2026-11-16: not in the pipeline (the flagship keeps changing); run it in the notebook on the saved weights later (TOOLING_TODO).
+- [x] (2026-11-16, results change) From 2.4: each strategy is averaged over its own valid rows → common evaluation window: `evaluation_start` = latest first weight row over every strategy in the folder; weights / forecasts before it are NaN'd. Guards: strategy with no weights or unloadable → left out with a warning; strategies starting later than the earliest → named in a warning; none with weights → raises. Only BMA / PMA avg log-lik / Mahalanobis changed (warm-up rows from `burn_in` no longer scored). Snapshot regenerated, noted in `test_snapshots.py`. 5 tests.
+- [x] **Duplication / flexibility** (~1–1.5 h, agreed 2026-11-15; done 2026-11-16, snapshot bit for bit). Built with `metrics=[...]` name selection instead of `scalar_metrics=` / `series_metrics=` overrides (add a metric = one dict entry); `evaluate_strategy` folded into the loop, index check moved to `load_strategy_outputs(folder, name, index)`; `scalars_to_dataframe` removed; selection test added:
   - `strategies: list[str] | None = None` on `evaluate_all_strategies` / `run_evaluation` (`None` = all in folder; unknown name → error listing what's there).
   - Metrics as dicts `SCALAR_METRICS` / `SERIES_METRICS` (name → function of one bundle: returns, weights, predictives, rf, theta, window; returns NaN / `None` when a prerequisite is missing). Overridable via `scalar_metrics=` / `series_metrics=`.
   - Replaces `compute_scalar_metrics` / `compute_series_metrics` with one loop, and the three copy-pasted blocks in `save_evaluation_results` with one loop writing `<name>.csv`.
   - Keep file names, `scalars.csv` column order and the `run_evaluation(folder, rf_series=, theta=)` signature → snapshot stays bit for bit, `make_snapshots.py` unaffected. Update the two tests that call `compute_scalar_metrics` directly.
 
 Edge-case notes:
-- [?] **Sharpe in `scalars.csv` is daily** (`_SCALING_FACTOR = 1`), but `compute_scalar_metrics`' docstring says "annualised (scaling = 252)". FYP values are daily (market ≈ 0.033 ≈ 0.52 annualised) — check the thesis tables are labelled daily. Fix the docstring.
-- [?] `run_evaluation` docstring says rolling window default 150 days; it's 252 (CLAUDE.md corrected).
-- [?] A strategy that fails to evaluate is printed as a warning and silently dropped from `scalars.csv`.
-- [?] Long-only strategies get NaN log-lik / Mahalanobis (no `*_longonly_mus.npy`) — fine, but they share predictives with their unconstrained twin.
+- [x] (docstring fixed 2026-11-16; thesis-label check is yours) **Sharpe in `scalars.csv` is daily** (`_SCALING_FACTOR = 1`), but `compute_scalar_metrics`' docstring says "annualised (scaling = 252)". FYP values are daily (market ≈ 0.033 ≈ 0.52 annualised) — check the thesis tables are labelled daily. Fix the docstring.
+- [x] (fixed 2026-11-16) `run_evaluation` docstring says rolling window default 150 days; it's 252 (CLAUDE.md corrected).
+- [x] (2026-11-16) A strategy that fails to evaluate is printed as a warning and silently dropped from `scalars.csv`. → Now an all-NaN row in `scalars.csv` (still printed); test updated.
+- [x] (closed 2026-11-16, no change: same forecast as the unconstrained twin, repeating it adds nothing) Long-only strategies get NaN log-lik / Mahalanobis (no `*_longonly_mus.npy`) — fine, but they share predictives with their unconstrained twin.
 
 ### 2.12 Scripts — [x] tests drafted 2026-11-13
 `tests/test_table1_summary_stats.py` (8 passing): raw-% loading with `-99.99` → NaN, EW block + date filter, bad weighting rejected, `compute_stats` on a known frame, `build_panel` one row per config, simulated save → load (percent units) → panel round trip in a temp dir, missing simulated file raises, all 10 `PORTFOLIO_CONFIGS` paths exist.
