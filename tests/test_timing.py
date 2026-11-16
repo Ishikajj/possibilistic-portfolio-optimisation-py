@@ -62,20 +62,26 @@ def _possibilistic(r):
 
 # name -> returns_df -> list of (forecast dict or None, weights DataFrame)
 ALGOS = {
-    "equal_weight": lambda r: [(None, air.equal_weight_strategy(r, START))],
-    "market_weight": lambda r: [(None, air.market_weight_strategy(r, START))],
+    "equal_weight": lambda r: [
+        (None, air.equal_weight_strategy(r, start=START))
+    ],
+    "market_weight": lambda r: [
+        (None, air.market_weight_strategy(r, start=START))
+    ],
     "minimum_variance": lambda r: [
-        (None, air.minimum_variance_strategy(r, START, window=WIN))
+        (None, air.minimum_variance_strategy(r, start=START, window=WIN))
     ],
     "historical_expanding": lambda r: [
-        air.historical_expectations_weights(r, START)
+        air.historical_expectations_weights(r, start=START)
     ],
-    "rolling_window": lambda r: [air.rolling_window_weights(r, WIN, START)],
+    "rolling_window": lambda r: [
+        air.rolling_window_weights(r, start=START, window=WIN)
+    ],
     "jorion_bayes_stein": lambda r: [
-        air.jorion_bayes_stein_strategy(r, WIN, START)
+        air.jorion_bayes_stein_strategy(r, start=START, window=WIN)
     ],
     "kan_zhou_three_fund": lambda r: [
-        air.kan_zhou_three_fund_strategy(r, WIN, START)
+        air.kan_zhou_three_fund_strategy(r, start=START, window=WIN)
     ],
     "bayesian_averaging": lambda r: [ba.run_core(r, burn_in=BURN, start=START)],
     "possibilistic": _possibilistic,

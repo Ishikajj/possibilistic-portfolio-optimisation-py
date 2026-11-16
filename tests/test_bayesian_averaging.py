@@ -49,7 +49,7 @@ def test_run_core_prior_at_t_sees_the_t_returns_before_t(monkeypatch, returns):
         return real(sum_R, sum_R2, t)
 
     monkeypatch.setattr(ba, "_new_model_prior", spy)
-    ba.run_core(returns, burn_in=40)
+    ba.run_core(returns, start=40, burn_in=40)
     R = returns.to_numpy()
     assert [t for *_, t in calls] == list(range(40, len(R)))
     for sum_R, sum_R2, t in calls:
@@ -215,7 +215,7 @@ def test_run_core_shapes_and_nan_layout(returns):
 
 
 def test_run_core_covariances_are_symmetric_positive_definite(returns):
-    pred, _ = ba.run_core(returns, burn_in=40)
+    pred, _ = ba.run_core(returns, start=40, burn_in=40)
     for S in pred["sigma_hat"][40:]:
         assert np.allclose(S, S.T)
         assert np.linalg.eigvalsh(S).min() > 0
@@ -224,10 +224,10 @@ def test_run_core_covariances_are_symmetric_positive_definite(returns):
 def test_run_core_uses_returns_up_to_t_only(returns):
     """Changing returns after t must not change the prediction at t."""
     t = 100
-    pred, _ = ba.run_core(returns, burn_in=40)
+    pred, _ = ba.run_core(returns, start=40, burn_in=40)
     changed = returns.copy()
     changed.iloc[t + 1 :] = 0.5
-    pred2, _ = ba.run_core(changed, burn_in=40)
+    pred2, _ = ba.run_core(changed, start=40, burn_in=40)
     assert np.allclose(
         pred["mu_hat"][: t + 1], pred2["mu_hat"][: t + 1], equal_nan=True
     )
@@ -247,3 +247,10 @@ def test_prune_keep_newest_evicts_least_probable():
         *_pool(probs / probs.sum()), max_models=3, prune_threshold=0
     )
     assert [m[0] for m in out[0]] == [2, 3, 4]
+
+
+def test_theta_reaches_the_weights(returns):
+    """theta was ignored before (always 1): unconstrained weights scale 1/theta."""
+    _, w1 = ba.run_core(returns, start=60, burn_in=40, theta=1.0)
+    _, w2 = ba.run_core(returns, start=60, burn_in=40, theta=2.0)
+    np.testing.assert_allclose(w2.to_numpy(), w1.to_numpy() / 2.0)

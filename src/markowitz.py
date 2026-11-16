@@ -35,13 +35,14 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
+from config import THETA
 from predictive import check_aligned
 
 
 def markowitz_step(
     mu_t: np.ndarray,
     sigma_t: np.ndarray,
-    theta: float = 1.0,
+    theta: float = THETA,
 ) -> np.ndarray:
     """Compute unconstrained Markowitz weights at one time step."""
     inv_sigma = np.linalg.inv(sigma_t)
@@ -52,7 +53,7 @@ def markowitz_step(
 def markowitz_step_long_only(
     mu_t: np.ndarray,
     sigma_t: np.ndarray,
-    theta: float = 1.0,
+    theta: float = THETA,
     w0: np.ndarray | None = None,
 ) -> np.ndarray:
     """Compute long-only Markowitz weights at one time step.
@@ -142,7 +143,7 @@ def markowitz_long_only(
     mu_sigma_dict: dict[str, np.ndarray],
     returns_df: pd.DataFrame,
     start: int,
-    theta: float = 1.0,
+    theta: float = THETA,
 ) -> pd.DataFrame:
     """Full pipeline: extract → long-only optimise → return DataFrame."""
     check_aligned(mu_sigma_dict, returns_df.index)
@@ -165,7 +166,7 @@ def markowitz_unconstrained(
     mu_sigma_dict: dict[str, np.ndarray],
     returns_df: pd.DataFrame,
     start: int,
-    theta: float = 1.0,
+    theta: float = THETA,
 ) -> pd.DataFrame:
     """Full pipeline: extract → compute → return DataFrame."""
     check_aligned(mu_sigma_dict, returns_df.index)

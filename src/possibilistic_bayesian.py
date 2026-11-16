@@ -27,7 +27,21 @@ import numpy as np
 import pandas as pd
 from numpy.linalg import slogdet
 
-from config import DATASETS_DIR, RF_PATH
+from config import (
+    BURN_IN,
+    DATASETS_DIR,
+    K_NEIGHBOURS,
+    KEEP_NEWEST,
+    MERGE_THRESHOLD,
+    NECESSITY_DEVICE,
+    NECESSITY_ETA,
+    NECESSITY_GAMMA,
+    NECESSITY_N_JOBS,
+    NU_BANDWIDTH,
+    POSSIBILISTIC_MAX_MODELS,
+    RF_PATH,
+    THETA,
+)
 from data_input import load_excess_returns, prepare_returns
 from faster_necessity import (
     deterministic_mask_weighting,
@@ -614,17 +628,19 @@ def _aggregate_possibilistic_niw(
 
 def run_core(
     returns_df: pd.DataFrame,
-    burn_in: int = 1000,
-    start: int | None = None,
-    merge_threshold: float = 0.15,
-    max_models: int = 100,
-    keep_newest: bool = True,
-    nu_bandwidth: int = 50,
-    k_neighbours: int = 5,
-    gamma: float = 1.0,
-    eta: float = 1.0,
-    device: str = "cpu",
-    n_jobs: int = 6,
+    *,
+    start: int,
+    burn_in: int = BURN_IN,
+    theta: float = THETA,
+    max_models: int = POSSIBILISTIC_MAX_MODELS,
+    keep_newest: bool = KEEP_NEWEST,
+    merge_threshold: float = MERGE_THRESHOLD,
+    nu_bandwidth: int = NU_BANDWIDTH,
+    k_neighbours: int = K_NEIGHBOURS,
+    gamma: float = NECESSITY_GAMMA,
+    eta: float = NECESSITY_ETA,
+    device: str = NECESSITY_DEVICE,
+    n_jobs: int = NECESSITY_N_JOBS,
 ) -> tuple[
     pd.DataFrame,
     dict[str, np.ndarray],
@@ -638,9 +654,11 @@ def run_core(
 
     Args:
         returns_df: (T, n) DataFrame of excess returns in decimals, numeric columns only.
-        burn_in: periods used to initialise sum_R / sum_R2 before model birth begins.
-        start: first row with weights (None = burn_in). Forecasts start at
+        Everything after returns_df is keyword-only; defaults come from config.
+        start: first row with weights (always passed). Forecasts start at
             burn_in: rows burn_in … start-1 are warm-up (learning, no weights).
+        burn_in: periods used to initialise sum_R / sum_R2 before model birth begins.
+        theta: risk aversion of the Markowitz weights.
         merge_threshold: Hellinger distance below which two models are merged.
         max_models: maximum pool size after pruning each step.
         keep_newest: if True, always retain the newborn model after pruning.
@@ -800,15 +818,14 @@ def run_core(
     )
     exp_predictive = make_predictive(mu_hat_arr_exp, sigma_hat_arr_exp, index)
 
-    weights_start = burn_in if start is None else start
     weights_masked = markowitz_unconstrained(
-        masked_predictive, returns_df, start=weights_start
+        masked_predictive, returns_df, start=start, theta=theta
     )
     weights_power = markowitz_unconstrained(
-        power_predictive, returns_df, start=weights_start
+        power_predictive, returns_df, start=start, theta=theta
     )
     weights_exp = markowitz_unconstrained(
-        exp_predictive, returns_df, start=weights_start
+        exp_predictive, returns_df, start=start, theta=theta
     )
 
     return (
@@ -835,6 +852,7 @@ def test_run_core() -> tuple[pd.DataFrame, tuple]:
 
     results = run_core(
         df_small,
+        start=20,
         burn_in=20,
         merge_threshold=0.15,
         max_models=10,

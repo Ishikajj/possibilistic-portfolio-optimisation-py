@@ -70,13 +70,13 @@ def test_minvar_mean_target_is_gmv_portfolio_mean():
 
 
 def test_equal_weight(returns):
-    w = air.equal_weight_strategy(returns, FIRST)
+    w = air.equal_weight_strategy(returns, start=FIRST)
     _assert_nan_layout(w, FIRST)
     assert np.allclose(w.iloc[FIRST:-1], 1.0 / N)
 
 
 def test_market_weight(returns):
-    w = air.market_weight_strategy(returns, FIRST)
+    w = air.market_weight_strategy(returns, start=FIRST)
     _assert_nan_layout(w, FIRST)
     assert (w["Mkt-RF"].iloc[FIRST:-1] == 1.0).all()
     assert (w[["a", "b"]].iloc[FIRST:-1] == 0.0).all().all()
@@ -84,12 +84,12 @@ def test_market_weight(returns):
 
 def test_market_weight_needs_market_column(returns):
     with pytest.raises(KeyError):
-        air.market_weight_strategy(returns.drop(columns="Mkt-RF"))
+        air.market_weight_strategy(returns.drop(columns="Mkt-RF"), start=FIRST)
 
 
 def test_minimum_variance(returns):
     win = 30
-    w = air.minimum_variance_strategy(returns, FIRST, window=win)
+    w = air.minimum_variance_strategy(returns, start=FIRST, window=win)
     _assert_nan_layout(w, FIRST)
     assert np.allclose(w.iloc[FIRST:-1].sum(axis=1), 1.0)
     t = 70
@@ -99,7 +99,7 @@ def test_minimum_variance(returns):
 
 
 def test_minimum_variance_window_longer_than_burn_in_delays_start(returns):
-    w = air.minimum_variance_strategy(returns, FIRST, window=80)
+    w = air.minimum_variance_strategy(returns, start=FIRST, window=80)
     _assert_nan_layout(w, 80)
 
 
@@ -107,7 +107,7 @@ def test_minimum_variance_window_longer_than_burn_in_delays_start(returns):
 
 
 def test_historical_moments_and_weights(returns):
-    pred, w = air.historical_expectations_weights(returns, FIRST)
+    pred, w = air.historical_expectations_weights(returns, start=FIRST)
     t = 70
     rows = returns.iloc[: t + 1]  # expanding: every return up to and incl. t
     assert np.allclose(pred["mu_hat"][t], rows.mean())
@@ -120,7 +120,7 @@ def test_historical_moments_and_weights(returns):
 
 def test_rolling_window_moments(returns):
     win = 25
-    pred, w = air.rolling_window_weights(returns, win, FIRST)
+    pred, w = air.rolling_window_weights(returns, start=FIRST, window=win)
     t = 90
     rows = _window_rows(returns, t, win)
     assert np.allclose(pred["mu_hat"][t], rows.mean())
@@ -149,7 +149,7 @@ def _jorion_by_hand(rows: pd.DataFrame):
 
 def test_jorion_matches_paper_formulas(returns):
     win = 30
-    est = air.jorion_bayes_stein_estimates(returns, win, FIRST)
+    est = air.jorion_bayes_stein_estimates(returns, start=FIRST, window=win)
     t = 70
     mu_star, S_star, v = _jorion_by_hand(_window_rows(returns, t, win))
     assert np.allclose(est["mu_star"][t], mu_star)
@@ -159,10 +159,12 @@ def test_jorion_matches_paper_formulas(returns):
 
 def test_jorion_shrinkage_is_convex_and_strategy_uses_it(returns):
     win = 30
-    est = air.jorion_bayes_stein_estimates(returns, win, FIRST)
+    est = air.jorion_bayes_stein_estimates(returns, start=FIRST, window=win)
     v = est["v"][FIRST:-1]
     assert ((v > 0) & (v < 1)).all()
-    pred, w = air.jorion_bayes_stein_strategy(returns, win, FIRST, theta=2.0)
+    pred, w = air.jorion_bayes_stein_strategy(
+        returns, start=FIRST, window=win, theta=2.0
+    )
     assert np.allclose(pred["mu_hat"], est["mu_star"], equal_nan=True)
     _assert_nan_layout(w, FIRST)
     t = 80
@@ -173,12 +175,12 @@ def test_jorion_shrinkage_is_convex_and_strategy_uses_it(returns):
 
 def test_jorion_rejects_too_short_window(returns):
     with pytest.raises(ValueError):
-        air.jorion_bayes_stein_estimates(returns, window=N + 2)
+        air.jorion_bayes_stein_estimates(returns, start=FIRST, window=N + 2)
 
 
 def test_kan_zhou_estimates(returns):
     win = 30
-    est = air.kan_zhou_three_fund_estimates(returns, win, FIRST)
+    est = air.kan_zhou_three_fund_estimates(returns, start=FIRST, window=win)
     t = 70
     rows = _window_rows(returns, t, win)
     S = rows.cov(ddof=0).values
@@ -194,8 +196,10 @@ def test_kan_zhou_estimates(returns):
 
 def test_kan_zhou_strategy_scales_mean_by_h(returns):
     win = 30
-    est = air.kan_zhou_three_fund_estimates(returns, win, FIRST)
-    pred, w = air.kan_zhou_three_fund_strategy(returns, win, FIRST, theta=2.0)
+    est = air.kan_zhou_three_fund_estimates(returns, start=FIRST, window=win)
+    pred, w = air.kan_zhou_three_fund_strategy(
+        returns, start=FIRST, window=win, theta=2.0
+    )
     assert np.allclose(
         pred["mu_hat"], est["h"][0] * est["mu_star"], equal_nan=True
     )
@@ -209,4 +213,4 @@ def test_kan_zhou_strategy_scales_mean_by_h(returns):
 
 def test_kan_zhou_rejects_too_short_window(returns):
     with pytest.raises(ValueError):
-        air.kan_zhou_three_fund_estimates(returns, window=N + 4)
+        air.kan_zhou_three_fund_estimates(returns, start=FIRST, window=N + 4)

@@ -39,11 +39,24 @@ from alternative_investment_rules import (
     rolling_window_weights,
 )
 from config import (
+    BAYESIAN_MAX_MODELS,
+    BURN_IN,
+    K_NEIGHBOURS,
+    MERGE_THRESHOLD,
+    NECESSITY_DEVICE,
+    NECESSITY_ETA,
+    NECESSITY_GAMMA,
+    NU_BANDWIDTH,
+    PERIODS_UNTIL_INVESTMENT,
+    POSSIBILISTIC_MAX_MODELS,
     RF_PATH,
+    ROLLING_WINDOW_LONG,
+    ROLLING_WINDOW_SHORT,
     SIM_DATA_DIR,
     SIM_N_ASSETS,
     SIM_SEED,
     SIM_T,
+    THETA,
 )
 from data_input import load_excess_returns, prepare_returns
 from predictive import save_predictive
@@ -76,19 +89,19 @@ def _save_algo_outputs(
 def calculate_all_functions_perdatasets(
     dataset: pd.DataFrame,
     dataset_name: str,
-    burn_in: int = 1000,
-    periods_until_investment: int = 1,
-    theta: float = 1.0,
-    max_models: int = 100,
-    merge_threshold: float = 0.01,
-    nu_bandwidth: int = 50,
-    k_neighbours: int = 5,
-    gamma: float = 1.0,
-    eta: float = 1.0,
-    rolling_window_long: int = 250,
-    rolling_window_short: int = 63,
+    burn_in: int = BURN_IN,
+    periods_until_investment: int = PERIODS_UNTIL_INVESTMENT,
+    theta: float = THETA,
+    max_models: int = POSSIBILISTIC_MAX_MODELS,
+    merge_threshold: float = MERGE_THRESHOLD,
+    nu_bandwidth: int = NU_BANDWIDTH,
+    k_neighbours: int = K_NEIGHBOURS,
+    gamma: float = NECESSITY_GAMMA,
+    eta: float = NECESSITY_ETA,
+    rolling_window_long: int = ROLLING_WINDOW_LONG,
+    rolling_window_short: int = ROLLING_WINDOW_SHORT,
     output_dir: Path | str | None = None,
-    device: str = "cpu",
+    device: str = NECESSITY_DEVICE,
 ) -> Path:
     """Run every portfolio algorithm on one dataset and persist all outputs.
 
@@ -161,19 +174,13 @@ def calculate_all_functions_perdatasets(
 
     # 1. 1/N ───────────────────────────────────────────────
     print(f"[{dataset_name}] 1/N equal weight...")
-    weights_1n = equal_weight_strategy(
-        returns_df,
-        start=start,
-    )
+    weights_1n = equal_weight_strategy(returns_df, start=start)
     _save_algo_outputs(folder, "equal_weight", weights=weights_1n)
 
     # 2. Market weight ───────────────────────────────────
     if "Mkt-RF" in returns_df.columns:
         print(f"[{dataset_name}] Market weight...")
-        weights_mkt = market_weight_strategy(
-            returns_df,
-            start=start,
-        )
+        weights_mkt = market_weight_strategy(returns_df, start=start)
         _save_algo_outputs(folder, "market_weight", weights=weights_mkt)
 
     # 3. Minimum variance ───────────────────────────────────────
@@ -188,8 +195,7 @@ def calculate_all_functions_perdatasets(
     # 4. Historical expanding window ─────────────────────────
     print(f"[{dataset_name}] Historical expanding-window Markowitz...")
     hist_ms, weights_hist = historical_expectations_weights(
-        returns_df,
-        start=start,
+        returns_df, start=start, theta=theta
     )
     _save_algo_outputs(
         folder,
@@ -203,9 +209,7 @@ def calculate_all_functions_perdatasets(
         f"[{dataset_name}] Rolling-window Markowitz (window={rolling_window_long})..."
     )
     roll_long_ms, weights_roll = rolling_window_weights(
-        returns_df,
-        window=rolling_window_long,
-        start=start,
+        returns_df, start=start, window=rolling_window_long, theta=theta
     )
     _save_algo_outputs(
         folder,
@@ -219,9 +223,7 @@ def calculate_all_functions_perdatasets(
         f"[{dataset_name}] Rolling-window Markowitz (window={rolling_window_short})..."
     )
     roll_short_ms, weights_roll = rolling_window_weights(
-        returns_df,
-        window=rolling_window_short,
-        start=start,
+        returns_df, start=start, window=rolling_window_short, theta=theta
     )
     _save_algo_outputs(
         folder,
@@ -256,10 +258,14 @@ def calculate_all_functions_perdatasets(
 
     # 8. Bayesian model averaging ────────────────────────────
     print(f"[{dataset_name}] Bayesian model averaging...")
+    # Bayesian has its own pool cap (config.BAYESIAN_MAX_MODELS);
+    # `max_models` is the possibilistic one. Passed through properly in P2.
     bay_ms, weights_bay = bayesian_averaging.run_core(
         returns_df,
-        burn_in=burn_in,
         start=start,
+        burn_in=burn_in,
+        theta=theta,
+        max_models=BAYESIAN_MAX_MODELS,
     )
     _save_algo_outputs(
         folder, "bayesian_averaging", weights=weights_bay, mu_sigma_dict=bay_ms
@@ -277,8 +283,9 @@ def calculate_all_functions_perdatasets(
         weights_exp,
     ) = possibilistic_bayesian.run_core(
         returns_df,
-        burn_in=burn_in,
         start=start,
+        burn_in=burn_in,
+        theta=theta,
         merge_threshold=merge_threshold,
         max_models=max_models,
         nu_bandwidth=nu_bandwidth,
@@ -333,18 +340,18 @@ def call_all_datasets(
     start_date: str | None = "1963-01-01",
     end_date: str | None = None,
     output_dir: Path | str | None = None,
-    burn_in: int = 1000,
-    periods_until_investment: int = 1,
-    theta: float = 1.0,
-    max_models: int = 100,
-    merge_threshold: float = 0.15,
-    nu_bandwidth: int = 50,
-    k_neighbours: int = 5,
-    gamma: float = 1.0,
-    eta: float = 1.0,
-    rolling_window_long: int = 250,
-    rolling_window_short: int = 63,
-    device: str = "cpu",
+    burn_in: int = BURN_IN,
+    periods_until_investment: int = PERIODS_UNTIL_INVESTMENT,
+    theta: float = THETA,
+    max_models: int = POSSIBILISTIC_MAX_MODELS,
+    merge_threshold: float = MERGE_THRESHOLD,
+    nu_bandwidth: int = NU_BANDWIDTH,
+    k_neighbours: int = K_NEIGHBOURS,
+    gamma: float = NECESSITY_GAMMA,
+    eta: float = NECESSITY_ETA,
+    rolling_window_long: int = ROLLING_WINDOW_LONG,
+    rolling_window_short: int = ROLLING_WINDOW_SHORT,
+    device: str = NECESSITY_DEVICE,
 ) -> list[Path]:
     """Run the full pipeline on every Kenneth French dataset in two passes.
 
@@ -439,18 +446,18 @@ def call_all_simulated_datasets(
     sim_data_dir: Path | str,
     sim_files: list[tuple[str, str, str]],
     output_dir: Path | str | None = None,
-    burn_in: int = 500,
-    periods_until_investment: int = 1,
-    theta: float = 1.0,
-    max_models: int = 100,
-    merge_threshold: float = 0.01,
-    nu_bandwidth: int = 50,
-    k_neighbours: int = 5,
-    gamma: float = 1.0,
-    eta: float = 1.0,
-    rolling_window_long: int = 250,
-    rolling_window_short: int = 63,
-    device: str = "cpu",
+    burn_in: int = BURN_IN,
+    periods_until_investment: int = PERIODS_UNTIL_INVESTMENT,
+    theta: float = THETA,
+    max_models: int = POSSIBILISTIC_MAX_MODELS,
+    merge_threshold: float = MERGE_THRESHOLD,
+    nu_bandwidth: int = NU_BANDWIDTH,
+    k_neighbours: int = K_NEIGHBOURS,
+    gamma: float = NECESSITY_GAMMA,
+    eta: float = NECESSITY_ETA,
+    rolling_window_long: int = ROLLING_WINDOW_LONG,
+    rolling_window_short: int = ROLLING_WINDOW_SHORT,
+    device: str = NECESSITY_DEVICE,
 ) -> list[Path]:
     """Run the full algorithm suite on all saved simulated datasets.
 

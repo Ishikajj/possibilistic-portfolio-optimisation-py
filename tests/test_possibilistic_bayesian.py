@@ -363,3 +363,10 @@ def test_run_core_weights_start_at_start(no_necessity, returns):
     for w in (w_m, w_p, w_e):
         assert w.iloc[:start].isna().all().all()
         assert w.iloc[start:-1].notna().all().all()
+
+
+def test_theta_reaches_the_weights(returns, no_necessity):
+    """theta was ignored before (always 1): unconstrained weights scale 1/theta."""
+    _, _, w1, *_ = pb.run_core(returns, **RUN, theta=1.0)
+    _, _, w2, *_ = pb.run_core(returns, **RUN, theta=2.0)
+    np.testing.assert_allclose(w2.to_numpy(), w1.to_numpy() / 2.0)

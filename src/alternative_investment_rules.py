@@ -13,9 +13,12 @@ Predictive moments + weights (tuple[mu_sigma_dict, pd.DataFrame]):
   jorion_bayes_stein_strategy     — Jorion (1986) shrinkage toward min-variance mean
   kan_zhou_three_fund_strategy    — Kan & Zhou (2007) three-fund rule with incomplete-beta shrinkage
 
-All functions take `start`, the first row with weights (the pipeline computes
-burn_in + periods_until_investment once). Weights are NaN before start and on the
-last row (weights at t apply to returns at t+1; timing convention: predictive.py).
+Signature of every strategy: (returns_df, *, start, window, theta) — all
+keyword-only after returns_df (only the ones a strategy uses). `start`, the
+first row with weights, is always passed (the pipeline computes
+burn_in + periods_until_investment once); window / theta default to
+config.ROLLING_WINDOW_LONG / config.THETA. Weights are NaN before start and on
+the last row (weights at t apply to returns at t+1; timing convention: predictive.py).
 Estimates at t use the w returns up to and including t: iloc[t-w+1 : t+1].
 mu_sigma_dict: predictive.make_predictive dict ("mu_hat", "sigma_hat", "index" = returns_df.index).
 """
@@ -27,6 +30,7 @@ from scipy.special import (
     betainc as _betainc,
 )  # regularized incomplete beta I_x(a,b)
 
+from config import ROLLING_WINDOW_LONG, THETA
 from markowitz import markowitz_unconstrained
 from predictive import make_predictive
 
@@ -76,7 +80,9 @@ def _minvar_mean_target(
 
 def historical_expectations_weights(
     returns_df: pd.DataFrame,
+    *,
     start: int,
+    theta: float = THETA,
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
     """Sample mean and covariance of all returns up to and including t
     (expanding window from row 0), from `start` on."""
@@ -91,18 +97,21 @@ def historical_expectations_weights(
 
     mu_sigma_dict = make_predictive(mu_hat, sigma_hat, returns_df.index)
     investment_weights = markowitz_unconstrained(
-        mu_sigma_dict, returns_df, start
+        mu_sigma_dict, returns_df, start, theta=theta
     )
 
     return mu_sigma_dict, investment_weights
 
 
-# returns the mu hat, sigma hat as well as the investment weights
 def rolling_window_weights(
     returns_df: pd.DataFrame,
-    window: int,
+    *,
     start: int,
+    window: int = ROLLING_WINDOW_LONG,
+    theta: float = THETA,
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
+    """Sample mean and covariance of the last `window` returns up to and
+    including t, from `start` (or `window`, if later)."""
 
     T, n = returns_df.shape
     mu_hat = np.full((T, n), np.nan)
@@ -115,7 +124,7 @@ def rolling_window_weights(
 
     mu_sigma_dict = make_predictive(mu_hat, sigma_hat, returns_df.index)
     investment_weights = markowitz_unconstrained(
-        mu_sigma_dict, returns_df, start
+        mu_sigma_dict, returns_df, start, theta=theta
     )
 
     return mu_sigma_dict, investment_weights
@@ -123,7 +132,8 @@ def rolling_window_weights(
 
 def equal_weight_strategy(
     returns_df: pd.DataFrame,
-    start: int = 0,
+    *,
+    start: int,
 ) -> pd.DataFrame:
     """Create 1/N weights from `start`, last row excluded."""
     T, n = returns_df.shape
@@ -143,7 +153,8 @@ def equal_weight_strategy(
 
 def market_weight_strategy(
     returns_df: pd.DataFrame,
-    start: int = 0,
+    *,
+    start: int,
     market_col: str = "Mkt-RF",
 ) -> pd.DataFrame:
     """Create market weights from `start`, last row excluded."""
@@ -171,8 +182,9 @@ def market_weight_strategy(
 
 def minimum_variance_strategy(
     returns_df: pd.DataFrame,
-    start: int = 0,
-    window: int = 250,
+    *,
+    start: int,
+    window: int = ROLLING_WINDOW_LONG,
 ) -> pd.DataFrame:
     """Create minimum variance weights from `start` (or `window`, if later)."""
     T, n = returns_df.shape
@@ -197,8 +209,9 @@ def minimum_variance_strategy(
 
 def jorion_bayes_stein_estimates(
     returns_df: pd.DataFrame,
-    window: int = 250,
-    start: int = 0,
+    *,
+    start: int,
+    window: int = ROLLING_WINDOW_LONG,
 ) -> dict[str, np.ndarray]:
     """Compute Jorion (1986) Bayes–Stein shrunk mean/covariance.
 
@@ -278,9 +291,10 @@ def jorion_bayes_stein_estimates(
 
 def jorion_bayes_stein_strategy(
     returns_df: pd.DataFrame,
-    window: int = 250,
-    start: int = 0,
-    theta: float = 1.0,
+    *,
+    start: int,
+    window: int = ROLLING_WINDOW_LONG,
+    theta: float = THETA,
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
     """Create Jorion's Bayes-Stein weights with burn-in and last-row exclusion."""
     est = jorion_bayes_stein_estimates(
@@ -304,8 +318,9 @@ def jorion_bayes_stein_strategy(
 
 def kan_zhou_three_fund_estimates(
     returns_df: pd.DataFrame,
-    window: int = 250,
-    start: int = 0,
+    *,
+    start: int,
+    window: int = ROLLING_WINDOW_LONG,
 ) -> dict[str, np.ndarray]:
     """Compute Kan and Zhou (2007) three-fund shrinkage estimates.
 
@@ -391,9 +406,10 @@ def kan_zhou_three_fund_estimates(
 
 def kan_zhou_three_fund_strategy(
     returns_df: pd.DataFrame,
-    window: int = 250,
-    start: int = 0,
-    theta: float = 1.0,
+    *,
+    start: int,
+    window: int = ROLLING_WINDOW_LONG,
+    theta: float = THETA,
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
     """Kan and Zhou (2007) three-fund rule.
 

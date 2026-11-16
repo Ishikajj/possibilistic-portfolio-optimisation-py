@@ -28,7 +28,7 @@ covariance matrix is common across assets.
 
 Entry point
 -----------
-run_core(returns_df, burn_in, start, ...)
+run_core(returns_df, *, start, burn_in, theta, ...)
     Input : returns_df — pd.DataFrame of shape (T, n), numeric excess returns.
     Output: (mu_sigma_dict, weights_df)
         mu_sigma_dict — {"mu_hat": ndarray (T, n), "sigma_hat": ndarray (T, n, n)}
@@ -42,7 +42,15 @@ import pandas as pd
 from numpy.linalg import slogdet
 from scipy.special import multigammaln
 
-from config import DATASETS_DIR, RF_PATH
+from config import (
+    BAYESIAN_MAX_MODELS,
+    BAYESIAN_PRUNE_THRESHOLD,
+    BURN_IN,
+    DATASETS_DIR,
+    KEEP_NEWEST,
+    RF_PATH,
+    THETA,
+)
 from data_input import load_excess_returns, prepare_returns
 from markowitz import markowitz_unconstrained
 from predictive import make_predictive
@@ -353,17 +361,21 @@ def _prune_models(
 
 def run_core(
     returns_df: pd.DataFrame,
-    burn_in: int = 1000,
-    start: int | None = None,
-    prune_threshold: float = 1e-6,
-    max_models: int | None = 2000,
-    keep_newest: bool = True,
+    *,
+    start: int,
+    burn_in: int = BURN_IN,
+    theta: float = THETA,
+    max_models: int | None = BAYESIAN_MAX_MODELS,
+    prune_threshold: float = BAYESIAN_PRUNE_THRESHOLD,
+    keep_newest: bool = KEEP_NEWEST,
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
     """Run probabilistic Bayesian model averaging over NIW models.
 
     Input : returns_df — (T, n) numeric excess returns, no RF column.
+            start — first row with weights (always passed).
             burn_in — first rows used only to set the prior.
-            start — first row with weights (None = burn_in).
+            theta — risk aversion of the Markowitz weights.
+            Everything after returns_df is keyword-only; defaults: config.
     Output: (mu_sigma_dict, weights_df)
         mu_sigma_dict — {"mu_hat": (T, n), "sigma_hat": (T, n, n)}, NaN before burn-in.
         weights_df    — Markowitz weights (T, n), aligned to returns_df.index.
@@ -437,7 +449,8 @@ def run_core(
     weights = markowitz_unconstrained(
         mu_sigma_dict=mu_sigma_dict,
         returns_df=returns_df,
-        start=burn_in if start is None else start,
+        start=start,
+        theta=theta,
     )
 
     # VERY IMPORTANT: the returned mu_hat_arr and sigma_hat_arr have info upto time t, meaning they are predicting t+1.
@@ -452,7 +465,7 @@ def main() -> None:
             start_date="2020-01-01",
         )
     )
-    predictives, weights = run_core(df, burn_in=100)
+    predictives, weights = run_core(df, start=100, burn_in=100)
     print(predictives["mu_hat"])
     print(predictives["sigma_hat"])
 

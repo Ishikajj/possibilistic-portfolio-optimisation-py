@@ -12,7 +12,7 @@ Nothing gets changed without a yes.
    "historical" truly expanding, possibilistic start row (2.9), P4 decided.
 2. Every remaining Part 2 section done to its agreed points (2.5–2.11).
    Nothing new is added unless it's a bug.
-3. Dead code decided: necessity + `necessity_archive/`.
+3. Dead code decided: necessity + `necessity_archive/`. Direction (user, 2026-11-16): plain possibility weighting becomes the default, but the necessity schemes stay **available as an option** — off by default, not deleted, and the code shouldn't change so much that switching necessity back on becomes hard.
 4. `TOOLING_TODO.md` has nothing open under Primary; the rest is marked "after
    the paper".
 5. One full rerun on the cleaned code, snapshot reference regenerated: the
@@ -203,7 +203,7 @@ Tests (`tests/test_alternative_investment_rules.py`, 17 passing): incomplete bet
 Window timing tests pin the CURRENT t-1 windows via one helper `_window_rows` → flips with the TODO fix.
 Bugs / checks (TOOLING_TODO): Kan-Zhou saved mean scaled by h; verify Kan-Zhou beta parameters vs paper. Existing: benchmarks one day behind; "historical expanding" is rolling.
 
-- [ ] **Argument redesign — shared by 2.5, 2.7 and 2.9** (user, 2026-11-16): `start`, `window`, `theta`, `burn_in` etc. are repeated per function and per layer → chances for error. Design one way of passing settings that covers all three kinds of algorithm before changing any of them:
+- [x] (done 2026-11-16, snapshot bit for bit) **Argument redesign — shared by 2.5, 2.7 and 2.9** (user, 2026-11-16): every algorithm is `(returns_df, *, start, ...)` — keyword-only after returns_df (no more `(r, WIN, START)` vs `(r, START, window=WIN)` swaps), `start` required, same names everywhere, defaults from `config.py` (BURN_IN, PERIODS_UNTIL_INVESTMENT, THETA, ROLLING_WINDOW_LONG/SHORT, KEEP_NEWEST, BAYESIAN_*, POSSIBILISTIC_MAX_MODELS, MERGE_THRESHOLD, NU_BANDWIDTH, K_NEIGHBOURS, NECESSITY_*). `theta` now reaches historical, rolling, Bayesian and possibilistic (was silently 1). Pipeline: keyword calls, its three functions' defaults from config (0.01 vs 0.15 / 250 vs 252 gone). `tests/test_config.py` pins the contract; theta tests in both averaging test files. Original note: `start`, `window`, `theta`, `burn_in` etc. are repeated per function and per layer → chances for error. Design one way of passing settings that covers all three kinds of algorithm before changing any of them:
   - benchmarks: `start`, `window`, `theta`;
   - Bayesian (2.7): `burn_in`, `start`, plus `theta` and `max_models` it doesn't get today (→ fixes P3);
   - possibilistic (2.9): `burn_in`, `start`, merge settings (`max_models`, `merge_threshold`, `nu_bandwidth`, `k_neighbours`) and the necessity settings (`gamma`, `eta`, `device`) — **necessity must keep working** until finish-line item 3 decides on it.
@@ -234,7 +234,7 @@ Tests (`tests/test_bayesian_averaging.py`, 15 passing): **marginal likelihood ==
 Correction: `sharing_prior_update` IS used (called every step in `run_core`); earlier "unused helper" remark was wrong.
 Existing TODO: P3 (θ, `max_models` not passed). P4 (`t-1`/`t-2` denominators in `_new_model_prior`) fixed 2026-11-16 (`2c8a4e8`).
 
-- [ ] Arguments via the shared design from 2.5 → `theta` and `max_models` passed in (fixes P3).
+- [x] (2026-11-16) Arguments via the shared design from 2.5 → `theta` and `max_models` passed in (fixes P3). `max_models` stays a separate setting (`config.BAYESIAN_MAX_MODELS` = 2000 vs possibilistic 100), passed explicitly by the pipeline.
 - [ ] TOOLING_TODO bug fixed in this step (with 2.9): `keep_newest` pruning evicts the wrong model (xfail test; **results change**).
 
 - [ ] **Duplication (with 2.9):** `_new_model_prior`, `_update_niw`, `_update_all_models` are exact copies in `bayesian_averaging.py` and `possibilistic_bayesian.py` (tested identical / same results). Keep one copy and import it in the other. Decided 2026-11-16: a small shared module (e.g. `niw.py`) that both import — possibilistic is the core of the project, so neither method should depend on the other. The burn-in setup of `sum_R` / `sum_R2` in both `run_core`s is duplicated too. Values must stay bit for bit.
@@ -253,7 +253,7 @@ Tests (`tests/test_possibilistic_bayesian.py`, 21 passing + 3 xfail = logged bug
 `tests/test_snapshots.py` also covers `run_core` end to end against the FYP code.
 Bugs (TOOLING_TODO, xfail tests): ~~weights start at row 500 not 1000~~ fixed 2026-11-16; `keep_newest` pruning evicts the wrong model (also Bayesian); Mahalanobis merge distance √2 off (only `results_cpu` used it).
 
-- [ ] Arguments via the shared design from 2.5; necessity settings (`gamma`, `eta`, `device`) kept and working until the necessity decision (finish-line item 3).
+- [x] (2026-11-16) Arguments via the shared design from 2.5; necessity settings (`gamma`, `eta`, `device`) kept and working until the necessity decision (finish-line item 3). Also takes `theta` now.
 - [ ] TOOLING_TODO bugs fixed in this step: `keep_newest` pruning (with 2.7, **results change**); silent `except Exception: pass` in `run_core` + `burn_obs = min(burn_in, T // 2)` silently shortening the burn-in; Mahalanobis merge distance √2 off (unused by current runs).
 
 Edge-case notes:
@@ -268,11 +268,14 @@ Edge-case notes:
 ### 2.10 `pipeline_wrapper.py` — [x] tests drafted 2026-11-13
 Tests (`tests/test_pipeline_wrapper.py`, 9 passing; the per-dataset run is stubbed for loop tests): real-data loop runs VW then EW per file with names `<stem>_value_weighted` / `_equal_weighted`, excess returns + `Mkt-RF` reach the run, parameters are passed through, extra tables ignored (`6_Portfolios_size_btm` case), unreadable file skipped with a warning, start/end date window; simulated loop runs each DGP on `Asset*` columns and copies `rf.csv`, skips missing files with a warning; `_save_algo_outputs` file names; **per-dataset run writes exactly the expected file set** (with and without `Mkt-RF`; necessity bypassed) and `returns.csv` round-trips.
 Numbers are covered by `tests/test_snapshots.py`.
+
+- [ ] **One output type for every strategy** (agreed 2026-11-16, with P1). Today there are three shapes: weights only (1/N, market, min-variance), `(forecast, weights)` (historical, rolling, Jorion, Kan-Zhou, Bayesian) and possibilistic's 7-tuple `(diag, forecast, weights) × 3 schemes`; the pipeline special-cases each. → e.g. `StrategyOutput(weights, forecast=None)`; possibilistic returns one per weighting scheme plus its diagnostics, so P1's algorithm dict is one uniform loop (save, long-only, evaluation). **Necessity must stay pluggable:** the possibilistic output is keyed by scheme (plain possibility by default; masked / power / exp when necessity is switched on), so turning necessity back on adds outputs, it doesn't change the type. Do together with the necessity decision (finish-line item 3).
+- [x] (done 2026-11-16 in the argument redesign) Default parameters differ between the three functions → `config.py`.
+
 ~~Bug: file without markers silently loads as empty data and gets run~~ — fixed in 2.2 (2026-11-15), xfail removed. Existing: `device="cuda"` in both `main()`s; real-data runs don't save `rf.csv`.
 
 Edge-case notes:
 - [?] `sys.path.insert` at import time (goes away with the package move).
-- [?] Default parameters differ between the three functions (e.g. `merge_threshold` 0.01 vs 0.15, `periods_until_investment` 1, `rolling_window_long` 250 vs 252 in `main`) → `config.py`.
 - [?] Real-data loop catches every loading exception and prints a warning → a typo in a path just skips that dataset.
 
 ### 2.11 `evaluation_pipeline.py` — [x] done 2026-11-16 (tests drafted 2026-11-13)
@@ -300,9 +303,9 @@ Edge-case notes:
 
 Edge-case notes:
 - [x] French file headers say missing data is `-99.99` **or `-999.`** → both handled in `data_input` since 2.2 (2026-11-15); `table1` uses it.
-- [?] `load_sim_pct` / `build_sim_panel` / `generate_and_save_sim_datasets` default `T=6000` (stale; data is T=10000, N=10) → `config.py`.
-- [?] `plot_weight_distributions.RESULTS_DIR` points at the non-existent `results/`; `OUTPUT_PATH` writes into `src/` → `config.py` / `figures/` (0.6).
-- [?] Plot `STRATEGIES` only covers Bayesian + 3 possibilistic, though `GROUP_COLOURS` lists benchmark / frequentist / shrinkage groups too.
+- [x] (done in 2.6, 2026-11-16) `load_sim_pct` / `build_sim_panel` / `generate_and_save_sim_datasets` default `T=6000` (stale; data is T=10000, N=10) → `config.py`.
+- [~] (deferred 2026-11-16: scripts are fixed when they're next needed) `plot_weight_distributions.RESULTS_DIR` points at the non-existent `results/`; `OUTPUT_PATH` writes into `src/` → `config.py` / `figures/` (0.6).
+- [~] (deferred 2026-11-16, same) Plot `STRATEGIES` only covers Bayesian + 3 possibilistic, though `GROUP_COLOURS` lists benchmark / frequentist / shrinkage groups too.
 
 ## Part 3 — After tests + move
 Back to `TOOLING_TODO.md` Primary list (device fix, P3, P2/P1, rf.csv, window fixes).
