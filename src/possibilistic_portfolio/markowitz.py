@@ -29,14 +29,12 @@ Last row is always NaN — predictions at T-1 have no subsequent return to inves
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
 from possibilistic_portfolio.config import THETA
-from possibilistic_portfolio.predictive import check_aligned
+from possibilistic_portfolio.predictive import check_aligned, warn_nan_rows
 
 
 def markowitz_step(
@@ -44,10 +42,8 @@ def markowitz_step(
     sigma_t: np.ndarray,
     theta: float = THETA,
 ) -> np.ndarray:
-    """Compute unconstrained Markowitz weights at one time step."""
-    inv_sigma = np.linalg.inv(sigma_t)
-    w = (1.0 / theta) * inv_sigma @ mu_t
-    return w
+    """Unconstrained Markowitz weights at one time step: Sigma^{-1} mu / theta."""
+    return np.linalg.solve(sigma_t, mu_t) / theta
 
 
 def markowitz_step_long_only(
@@ -127,15 +123,9 @@ def compute_weights_array(
             except np.linalg.LinAlgError:
                 skipped["singular Sigma"] += 1
 
-    if sum(skipped.values()) > 0:
-        reasons = ", ".join(f"{k}: {v}" for k, v in skipped.items() if v)
-        warnings.warn(
-            f"markowitz: {sum(skipped.values())} of {max(T - 1 - start, 0)} "
-            f"investable rows left NaN ({reasons})",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-
+    warn_nan_rows(
+        "markowitz", skipped, max(T - 1 - start, 0), "investable rows"
+    )
     return weights
 
 

@@ -68,7 +68,7 @@ def test_step_identity_covariance_gives_mu():
 def test_step_matches_closed_form():
     rng = np.random.default_rng(1)
     mu, sigma = rng.normal(size=4), _random_spd(rng, 4)
-    expected = np.linalg.solve(sigma, mu) / 2.5
+    expected = np.linalg.inv(sigma) @ mu / 2.5  # the code uses solve
     assert np.allclose(markowitz_step(mu, sigma, theta=2.5), expected)
 
 
