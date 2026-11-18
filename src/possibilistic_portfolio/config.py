@@ -29,6 +29,17 @@ FRENCH_PORTFOLIO_FILES = [
     "6_Portfolios_size_btm.csv",
 ]
 
+# Algorithms run by pipeline_wrapper.main / main_simulated: None = all, or
+# names from pipeline_wrapper.ALGORITHMS (`uv run python -m
+# possibilistic_portfolio.pipeline_wrapper --help` lists them), e.g.
+# ["bayesian_averaging", "possibilistic"]. --algorithms overrides this.
+RUN_ALGORITHMS: list[str] | None = None
+
+# Date window of the Kenneth French runs (YYYY-MM-DD, inclusive); END_DATE
+# None = up to the last date in the files.
+START_DATE: str | None = "1980-01-01"
+END_DATE: str | None = None
+
 # Simulated datasets (simulated_datasets, table1_summary_stats, pipeline):
 # default size and seed of every DGP and of the saved CSVs.
 SIM_DATA_DIR = DATASETS_DIR / "simulated"

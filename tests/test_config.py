@@ -91,11 +91,34 @@ def test_pipeline_settings_default_to_config():
         config.NU_BANDWIDTH,
         config.K_NEIGHBOURS,
     )
-    assert (s.necessity, s.gamma, s.eta, s.device) == (
+    assert (s.necessity, s.gamma, s.eta, s.device, s.n_jobs) == (
         config.USE_NECESSITY,
         config.NECESSITY_GAMMA,
         config.NECESSITY_ETA,
         config.NECESSITY_DEVICE,
+        config.NECESSITY_N_JOBS,
     )
+    assert s.keep_newest == config.KEEP_NEWEST
+    assert s.bayesian_prune_threshold == config.BAYESIAN_PRUNE_THRESHOLD
     # start = burn_in + periods_until_investment, for every strategy
     assert RunSettings(burn_in=7, periods_until_investment=3).start == 10
+
+
+def test_run_algorithms_come_from_config():
+    """main / main_simulated run config.RUN_ALGORITHMS (None = all), and
+    every name listed there exists."""
+    from possibilistic_portfolio import pipeline_wrapper as pw
+
+    for entry in (pw.main, pw.main_simulated):
+        default = inspect.signature(entry).parameters["algorithms"].default
+        assert default == config.RUN_ALGORITHMS
+    if config.RUN_ALGORITHMS is not None:
+        assert set(config.RUN_ALGORITHMS) <= set(pw.ALGORITHMS)
+
+
+def test_date_window_comes_from_config():
+    from possibilistic_portfolio import pipeline_wrapper as pw
+
+    p = inspect.signature(pw.call_all_datasets).parameters
+    assert p["start_date"].default == config.START_DATE
+    assert p["end_date"].default == config.END_DATE

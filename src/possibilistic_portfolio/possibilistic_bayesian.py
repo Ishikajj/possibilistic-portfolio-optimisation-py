@@ -29,6 +29,7 @@ Entry point: run_core(returns_df, ...) — returns (diag_df, outputs), outputs =
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 import numpy as np
@@ -71,6 +72,9 @@ from possibilistic_portfolio.predictive import (
 
 # Weighting schemes that need necessity scores (run_core(necessity=True)).
 NECESSITY_SCHEMES = ("masked", "power", "exp")
+
+
+log = logging.getLogger(__name__)
 
 
 def _append_new_model(
@@ -665,7 +669,7 @@ def run_core(
 
     for t in range(burn_in, T):
         if t % 1000 == 0:
-            print(f"  possibilistic: step {t} / {T}")
+            log.info("  possibilistic: step %d / %d", t, T)
 
         R_t = R[t]
 

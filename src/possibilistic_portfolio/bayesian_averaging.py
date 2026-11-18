@@ -37,6 +37,8 @@ run_core(returns_df, *, start, burn_in, theta, ...)
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 from numpy.linalg import slogdet
@@ -58,6 +60,8 @@ from possibilistic_portfolio.data_input import (
 )
 from possibilistic_portfolio.markowitz import markowitz_unconstrained
 from possibilistic_portfolio.predictive import StrategyOutput, make_predictive
+
+log = logging.getLogger(__name__)
 
 
 def sharing_prior_update(
@@ -335,7 +339,7 @@ def run_core(
 
     for t in range(burn_in, T):
         if t % 1000 == 0:
-            print(f"  bayesian averaging: step {t} / {T}")
+            log.info("  bayesian averaging: step %d / %d", t, T)
         # prior of the newborn model: returns before t only (not R[t] yet)
         mu_bar, lam_bar = niw.new_model_prior(sum_R, sum_R2, t)
         _append_new_model(mus, kappas, Lambdas, nus, mu_bar, lam_bar, n)
