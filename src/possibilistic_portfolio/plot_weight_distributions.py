@@ -14,9 +14,12 @@ from possibilistic_portfolio.config import FIGURES_DIR, RESULTS_DIR
 
 OUTPUT_PATH = FIGURES_DIR / "weight_distributions.png"
 
-# (algo_name, display_label, group) — group drives colour
+# (algo_name, display_label, group) — group drives colour. Strategies a run
+# doesn't have are skipped (plain: runs from 2026-11-17; masked / power / exp:
+# older runs, or runs with necessity switched on).
 STRATEGIES = [
     ("bayesian_averaging", "Bayesian MA", "bayesian"),
+    ("possibilistic_plain", "Poss. Plain", "possibilistic"),
     ("possibilistic_masked", "Poss. Masked", "possibilistic"),
     ("possibilistic_power", "Poss. Power", "possibilistic"),
     ("possibilistic_exp", "Poss. Exp", "possibilistic"),

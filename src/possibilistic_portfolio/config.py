@@ -61,7 +61,10 @@ MERGE_THRESHOLD = 0.15  # Hellinger distance below which models merge
 NU_BANDWIDTH = 50  # max |nu_i - nu_j| for merge candidates
 K_NEIGHBOURS = 5  # forward neighbours scanned per model when merging
 
-# Necessity (possibilistic only; kept until the necessity decision)
+# Necessity (possibilistic only). Optional and off by default: plain
+# possibility weighting is the default scheme. Switched on, the possibilistic
+# run also returns the masked / power / exp schemes (slow: ~90 min per dataset).
+USE_NECESSITY = False
 NECESSITY_GAMMA = 1.0  # power weighting exponent
 NECESSITY_ETA = 1.0  # exponential weighting decay
 NECESSITY_DEVICE = "cpu"  # "cuda" needs PyTorch

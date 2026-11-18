@@ -60,6 +60,7 @@ from possibilistic_portfolio.config import (
     ROLLING_WINDOW_SHORT,
     SIM_DATA_DIR,
     THETA,
+    USE_NECESSITY,
 )
 from possibilistic_portfolio.data_input import (
     load_excess_returns,
@@ -88,6 +89,7 @@ class RunSettings:
     merge_threshold: float = MERGE_THRESHOLD
     nu_bandwidth: int = NU_BANDWIDTH
     k_neighbours: int = K_NEIGHBOURS
+    necessity: bool = USE_NECESSITY  # also run masked / power / exp
     gamma: float = NECESSITY_GAMMA
     eta: float = NECESSITY_ETA
     device: str = NECESSITY_DEVICE
@@ -162,6 +164,7 @@ ALGORITHMS: dict[
             "merge_threshold": s.merge_threshold,
             "nu_bandwidth": s.nu_bandwidth,
             "k_neighbours": s.k_neighbours,
+            "necessity": s.necessity,
             "gamma": s.gamma,
             "eta": s.eta,
             "device": s.device,
@@ -179,8 +182,8 @@ def _run_algorithm(
     fn, settings_for = ALGORITHMS[name]
     result = fn(returns_df, start=settings.start, **settings_for(settings))
     if name == "possibilistic":
-        # (diagnostics, {scheme: output}): one strategy per weighting scheme,
-        # so a new scheme (e.g. plain possibility weighting) is one more key
+        # (diagnostics, {scheme: output}): one strategy per weighting scheme
+        # ("plain"; with settings.necessity also masked / power / exp)
         diag_df, outputs = result
         return AlgorithmRun(
             {f"possibilistic_{scheme}": o for scheme, o in outputs.items()},

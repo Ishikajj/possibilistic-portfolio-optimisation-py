@@ -36,14 +36,6 @@ BURN, START, WIN = 40, 60, 30
 T_CHECK = 100  # the day t whose rows are checked
 
 
-@pytest.fixture(autouse=True)
-def no_necessity(monkeypatch):
-    """Necessity is being removed; all ones keeps possibilistic fast."""
-    monkeypatch.setattr(
-        pb, "necessity_scores_fast", lambda y_next, mus, **kw: np.ones(len(mus))
-    )
-
-
 @pytest.fixture
 def returns() -> pd.DataFrame:
     rng = np.random.default_rng(0)
@@ -59,9 +51,8 @@ def _pair(out: StrategyOutput) -> tuple[dict | None, pd.DataFrame]:
 
 
 def _possibilistic(r):
-    _, outputs = pb.run_core(
-        r, burn_in=BURN, start=START, max_models=15, n_jobs=1
-    )
+    # plain possibility weighting (necessity is off by default)
+    _, outputs = pb.run_core(r, burn_in=BURN, start=START, max_models=15)
     return [_pair(o) for o in outputs.values()]
 
 

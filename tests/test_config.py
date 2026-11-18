@@ -59,10 +59,16 @@ def test_method_specific_defaults_come_from_config():
     assert p["merge_threshold"].default == config.MERGE_THRESHOLD
     assert p["nu_bandwidth"].default == config.NU_BANDWIDTH
     assert p["k_neighbours"].default == config.K_NEIGHBOURS
+    assert p["necessity"].default == config.USE_NECESSITY
     assert p["gamma"].default == config.NECESSITY_GAMMA
     assert p["eta"].default == config.NECESSITY_ETA
     assert p["device"].default == config.NECESSITY_DEVICE
     assert p["n_jobs"].default == config.NECESSITY_N_JOBS
+
+
+def test_necessity_is_off_by_default():
+    """Plain possibility weighting is the default; necessity is an option."""
+    assert config.USE_NECESSITY is False
 
 
 def test_pipeline_settings_default_to_config():
@@ -85,7 +91,8 @@ def test_pipeline_settings_default_to_config():
         config.NU_BANDWIDTH,
         config.K_NEIGHBOURS,
     )
-    assert (s.gamma, s.eta, s.device) == (
+    assert (s.necessity, s.gamma, s.eta, s.device) == (
+        config.USE_NECESSITY,
         config.NECESSITY_GAMMA,
         config.NECESSITY_ETA,
         config.NECESSITY_DEVICE,

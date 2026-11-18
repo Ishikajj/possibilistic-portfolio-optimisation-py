@@ -5,7 +5,9 @@ the orchestration: which datasets get run, under which names, which files land
 where.
 """
 
+import dataclasses
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -218,21 +220,22 @@ PREDICTIVE = [
     "jorion_bayes_stein",
     "kan_zhou_three_fund",
     "bayesian_averaging",
-    "possibilistic_masked",
-    "possibilistic_power",
-    "possibilistic_exp",
+    "possibilistic_plain",
 ]
+NECESSITY = ["possibilistic_masked", "possibilistic_power", "possibilistic_exp"]
+
+
+def _expected_files(strategies: list[str]) -> set[str]:
+    """Weights, forecast and long-only weights of predictive strategies."""
+    return {
+        f"{a}_{s}"
+        for a in strategies
+        for s in ["weights.csv", "predictive.npz", "longonly_weights.csv"]
+    }
 
 
 @pytest.mark.parametrize("with_market", [True, False])
-def test_per_dataset_run_writes_expected_files(
-    monkeypatch, tmp_path, with_market
-):
-    monkeypatch.setattr(
-        possibilistic_bayesian,
-        "necessity_scores_fast",
-        lambda y_next, mus, **kw: np.ones(len(mus)),
-    )
+def test_per_dataset_run_writes_expected_files(tmp_path, with_market):
     rng = np.random.default_rng(0)
     cols = ["P1", "P2", "Mkt-RF"] if with_market else ["P1", "P2", "P3"]
     data = pd.DataFrame(rng.normal(0.0005, 0.01, (90, 3)), columns=cols)
@@ -243,15 +246,8 @@ def test_per_dataset_run_writes_expected_files(
         output_dir=tmp_path,
     )
     expected = {"returns.csv", "possibilistic_diagnostics.csv"}
-    expected |= {
-        f"{a}_weights.csv"
-        for a in ["equal_weight", "minimum_variance", *PREDICTIVE]
-    }
-    expected |= {
-        f"{a}_{s}"
-        for a in PREDICTIVE
-        for s in ["predictive.npz", "longonly_weights.csv"]
-    }
+    expected |= {"equal_weight_weights.csv", "minimum_variance_weights.csv"}
+    expected |= _expected_files(PREDICTIVE)
     if with_market:
         expected.add("market_weight_weights.csv")
     assert {p.name for p in folder.iterdir()} == expected
@@ -260,12 +256,38 @@ def test_per_dataset_run_writes_expected_files(
     )
 
 
-def test_dates_reach_every_output(monkeypatch, tmp_path):
+def test_necessity_adds_the_three_schemes(monkeypatch, tmp_path):
+    """Off by default; switched on, the same run also saves masked / power /
+    exp next to plain (scores replaced here: the real ones are slow)."""
     monkeypatch.setattr(
         possibilistic_bayesian,
         "necessity_scores_fast",
-        lambda y_next, mus, **kw: np.ones(len(mus)),
+        lambda y_next, mus, **kw: np.arange(1, len(mus) + 1) / len(mus),
     )
+    rng = np.random.default_rng(0)
+    data = pd.DataFrame(
+        rng.normal(0.0005, 0.01, (90, 3)), columns=["P1", "P2", "P3"]
+    )
+    run: dict[str, Any] = dict(
+        algorithms=["possibilistic"], output_dir=tmp_path
+    )
+    off = pw.calculate_all_functions_perdatasets(
+        data, "off", settings=SMALL, **run
+    )
+    on = pw.calculate_all_functions_perdatasets(
+        data, "on", settings=dataclasses.replace(SMALL, necessity=True), **run
+    )
+    base = {"returns.csv", "possibilistic_diagnostics.csv"}
+    plain = _expected_files(["possibilistic_plain"])
+    assert {p.name for p in off.iterdir()} == base | plain
+    assert {p.name for p in on.iterdir()} == (
+        base | plain | _expected_files(NECESSITY)
+    )
+    name = "possibilistic_plain_weights.csv"
+    assert (off / name).read_text() == (on / name).read_text()
+
+
+def test_dates_reach_every_output(tmp_path):
     rng = np.random.default_rng(0)
     dates = pd.bdate_range("1990-01-02", periods=90, name="Date")
     data = pd.DataFrame(
@@ -285,6 +307,10 @@ def test_dates_reach_every_output(monkeypatch, tmp_path):
         assert w.index.equals(dates), algo
         if pred is not None:
             assert pred["index"].equals(dates), algo
+    diag = pd.read_csv(
+        folder / "possibilistic_diagnostics.csv", index_col=0, parse_dates=True
+    )
+    assert diag.index.equals(dates[SMALL.burn_in :])  # from burn_in on
 
 
 # --- algorithm registry and selection (P1) ---------------------------------

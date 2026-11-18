@@ -2,12 +2,13 @@
 
 Covers, end to end:
   - data_input: Kenneth French VW + EW blocks, risk-free rate, excess returns
-  - pipeline_wrapper.calculate_all_functions_perdatasets: all 11 methods + long-only
+  - pipeline_wrapper.calculate_all_functions_perdatasets: every algorithm + long-only
   - evaluation_pipeline.run_evaluation: Sharpe, CEQ, log-likelihood, Mahalanobis
 
-Necessity runs for real on CPU (joblib, seeded per time step). Pass
---bypass-necessity to replace it by all ones instead: masked / power / exp then
-equal plain possibility weighting, and faster_necessity.py is never run.
+By default this is the default pipeline: possibilistic with plain possibility
+weighting, no necessity (~15 s). Pass --necessity to also run the necessity
+schemes (masked / power / exp) with real scores on CPU (joblib, seeded per
+time step; ~80 min): a separate reference, e.g. reference.npz.
 
 Runs the installed package (possibilistic_portfolio, `uv sync`), i.e. the
 current code. References from older code have to be made on a checkout of
@@ -15,10 +16,12 @@ that code (the FYP code on `dev` has the flat src/ layout, before the
 package move; this script then needs its pre-move version).
 
 Usage (from dev/):
-  # make a reference from the current code
-  uv run python tests/snapshots/make_snapshots.py --out tests/snapshots/reference.npz
+  # make the reference pytest uses (tests/test_snapshots.py) from the current code
+  uv run python tests/snapshots/make_snapshots.py --out tests/snapshots/reference_no_necessity.npz
   # check the current code against it
-  uv run python tests/snapshots/make_snapshots.py --compare tests/snapshots/reference.npz
+  uv run python tests/snapshots/make_snapshots.py --compare tests/snapshots/reference_no_necessity.npz
+  # the same with real necessity
+  uv run python tests/snapshots/make_snapshots.py --necessity --out tests/snapshots/reference.npz
 """
 
 from __future__ import annotations
@@ -55,15 +58,6 @@ PARAMS: dict[str, Any] = dict(
 START_DATE = "1980-01-01"
 
 
-def _bypass_necessity(possibilistic_bayesian) -> None:
-    """Replace necessity scoring with all ones, so necessity is held constant
-    and has no effect on the possibilistic algorithm. Skips the heavy
-    computation (~30 s instead of ~80 min)."""
-    possibilistic_bayesian.necessity_scores_fast = lambda y_next, mus, **kw: (
-        np.ones(len(mus))
-    )
-
-
 def _frame_to_arrays(prefix: str, df: pd.DataFrame, out: dict) -> None:
     """Store a DataFrame as two arrays, since .npz only holds plain arrays:
     the values, and the column names (which .to_numpy() drops)."""
@@ -71,18 +65,17 @@ def _frame_to_arrays(prefix: str, df: pd.DataFrame, out: dict) -> None:
     out[prefix + "__cols"] = np.array([str(c) for c in df.columns])
 
 
-def build(bypass_necessity: bool = False) -> dict[str, np.ndarray]:
+def build(necessity: bool = False) -> dict[str, np.ndarray]:
     """Load the data, run the full pipeline + evaluation on the `real` and
-    `sim` slices, and collect every output into one dict of arrays."""
+    `sim` slices, and collect every output into one dict of arrays.
+    `necessity` switches the necessity schemes on (real scores, slow)."""
     from possibilistic_portfolio import (
         data_input,
         evaluation_pipeline,
         pipeline_wrapper,
-        possibilistic_bayesian,
     )
 
-    if bypass_necessity:
-        _bypass_necessity(possibilistic_bayesian)
+    settings = pipeline_wrapper.RunSettings(**PARAMS, necessity=necessity)
     out: dict[str, np.ndarray] = {}
 
     # --- data_input, end to end on one real file (both blocks) -------------
@@ -123,15 +116,13 @@ def build(bypass_necessity: bool = False) -> dict[str, np.ndarray]:
             folder = pipeline_wrapper.calculate_all_functions_perdatasets(
                 returns_df,
                 name,
-                settings=pipeline_wrapper.RunSettings(**PARAMS),
+                settings=settings,
                 output_dir=tmp,
             )
             evaluation_pipeline.run_evaluation(folder, rf_series=rf, theta=1.0)
             for f in sorted(folder.iterdir()):
                 key = f"{name}__{f.stem}"
-                if f.suffix == ".npy":  # FYP code: <algo>_mus / _sigmas.npy
-                    out[key] = np.load(f)
-                elif f.suffix == ".npz":  # <algo>_predictive.npz, same keys
+                if f.suffix == ".npz":  # <algo>_predictive.npz
                     algo = f.stem.removesuffix("_predictive")
                     with np.load(f) as z:
                         out[f"{name}__{algo}_mus"] = z["mu_hat"]
@@ -175,10 +166,10 @@ if __name__ == "__main__":
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--out", type=Path)
     g.add_argument("--compare", type=Path)
-    p.add_argument("--bypass-necessity", action="store_true")
+    p.add_argument("--necessity", action="store_true")
     args = p.parse_args()
 
-    result = build(bypass_necessity=args.bypass_necessity)
+    result = build(necessity=args.necessity)
     if args.out:
         np.savez_compressed(args.out, **result)
         print(f"saved {len(result)} arrays to {args.out}")

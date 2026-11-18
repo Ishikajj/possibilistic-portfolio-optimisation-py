@@ -1,16 +1,20 @@
-"""Tests for possibilistic_bayesian.py — everything except necessity.
+"""Tests for possibilistic_bayesian.py — everything except the necessity scores.
 
-Necessity is being removed from the project, so `necessity_scores_fast` is
-replaced by all ones in every run_core test: masked / power / exp then all
-reduce to plain possibility weighting.
+Plain possibility weighting is the default. Necessity is optional
+(`necessity=True`); its scores are slow, so the tests that switch it on replace
+`necessity_scores_fast` (fixture `fake_necessity`). The pieces shared with the
+Bayesian method (newborn prior, NIW update, burn-in sums, top-models
+selection) are tested in test_niw.py.
 """
 
+import warnings
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from possibilistic_portfolio import niw
 from possibilistic_portfolio import possibilistic_bayesian as pb
 from possibilistic_portfolio.markowitz import markowitz_step
 from possibilistic_portfolio.predictive import StrategyOutput
@@ -43,9 +47,13 @@ def _niw_pool(
 
 
 @pytest.fixture
-def no_necessity(monkeypatch):
+def fake_necessity(monkeypatch):
+    """Necessity scores in (0, 1] that differ between models (model m of M
+    gets (m + 1) / M), so the three necessity schemes differ from plain."""
     monkeypatch.setattr(
-        pb, "necessity_scores_fast", lambda y_next, mus, **kw: np.ones(len(mus))
+        pb,
+        "necessity_scores_fast",
+        lambda y_next, mus, **kw: np.arange(1, len(mus) + 1) / len(mus),
     )
 
 
@@ -55,32 +63,22 @@ def returns() -> pd.DataFrame:
     return pd.DataFrame(rng.normal(0.0005, 0.01, (150, N)), columns=list("abc"))
 
 
-RUN: dict[str, Any] = dict(burn_in=40, start=60, max_models=15, n_jobs=1)
+RUN: dict[str, Any] = dict(burn_in=40, start=60, max_models=15)
 
 
 # --- newborn model ---------------------------------------------------------
 
 
-def test_new_model_prior_is_pooled_sample_mean_and_variance():
-    rng = np.random.default_rng(1)
-    R = rng.normal(0.001, 0.01, (50, N))
-    mu_bar, lam_bar = pb._new_model_prior(R.sum(0), (R**2).sum(0), t=50)
-    assert np.isclose(mu_bar, R.mean(0).mean())
-    assert np.isclose(lam_bar, R.var(0, ddof=1).mean())
-
-
-def test_run_core_prior_at_t_sees_the_t_returns_before_t(
-    no_necessity, monkeypatch, returns
-):
+def test_run_core_prior_at_t_sees_the_t_returns_before_t(monkeypatch, returns):
     """At step t, sum_R / sum_R2 hold rows 0 … t-1 (t returns, not R[t])."""
     calls = []
-    real = pb._new_model_prior
+    real = niw.new_model_prior
 
     def spy(sum_R, sum_R2, t):
         calls.append((sum_R.copy(), sum_R2.copy(), t))
         return real(sum_R, sum_R2, t)
 
-    monkeypatch.setattr(pb, "_new_model_prior", spy)
+    monkeypatch.setattr(niw, "new_model_prior", spy)
     pb.run_core(returns, **RUN)
     R = returns.to_numpy()
     assert [t for *_, t in calls] == list(range(RUN["burn_in"], len(R)))
@@ -171,13 +169,18 @@ def test_prune_rejects_mismatched_lengths():
         pb._prune_models(mus, kappas, Lams, nus[:1], poss)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="TOOLING_TODO bug: keep_newest evicts the highest-index model, not the least possible",
-)
 def test_prune_keep_newest_evicts_least_possible():
+    """Was: the kept model with the highest index (here the most possible)."""
     out = pb._prune_models(*_pool([0.8, 0.1, 0.9, 1.0, 0.05]), max_models=3)
     assert [int(m[0]) for m in out[0]] == [2, 3, 4]
+    assert np.allclose(out[4], [0.9, 1.0, 0.05])
+
+
+def test_prune_without_keep_newest_is_plain_top_k():
+    out = pb._prune_models(
+        *_pool([0.8, 0.1, 0.9, 1.0, 0.05]), max_models=3, keep_newest=False
+    )
+    assert [int(m[0]) for m in out[0]] == [0, 2, 3]
 
 
 # --- merging ---------------------------------------------------------------
@@ -224,18 +227,16 @@ def test_hellinger_one_dimensional_closed_form():
     assert np.isclose(got, np.sqrt(h2))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="TOOLING_TODO bug: pooled covariance is S1 + S2, not (S1 + S2) / 2",
-)
 def test_mahalanobis_between_means():
+    """Pooled covariance is (S1 + S2) / 2 (was S1 + S2: distances √2 short)."""
     mu1, mu2, S1, S2 = (
         np.zeros(2),
         np.array([1.0, 2.0]),
         np.eye(2),
         3 * np.eye(2),
     )
-    expected = np.sqrt((mu2 - mu1) @ np.linalg.inv((S1 + S2) / 2) @ (mu2 - mu1))
+    d = mu2 - mu1
+    expected = np.sqrt(d @ np.linalg.solve((S1 + S2) / 2, d))
     assert np.isclose(
         pb._gaussian_mahalanobis_distance(mu1, S1, mu2, S2), expected
     )
@@ -244,7 +245,7 @@ def test_mahalanobis_between_means():
 def test_merge_core_merges_close_models_and_keeps_far_ones():
     mu, _, Lam, _ = _niw()
     mus = [mu, mu + 1e-6, mu + 1.0]
-    out = pb._merge_models_hellinger(
+    out = pb._merge_models(
         mus,
         [1.0, 1.0, 1.0],
         [Lam] * 3,
@@ -258,7 +259,7 @@ def test_merge_core_merges_close_models_and_keeps_far_ones():
 
 def test_merge_core_respects_nu_bandwidth():
     mu, _, Lam, _ = _niw()
-    out = pb._merge_models_hellinger(
+    out = pb._merge_models(
         [mu, mu],
         [1.0, 1.0],
         [Lam] * 2,
@@ -268,6 +269,70 @@ def test_merge_core_respects_nu_bandwidth():
         nu_bandwidth=50,
     )
     assert len(out[0]) == 2  # identical but too far apart in nu
+
+
+def test_merge_distance_is_pluggable():
+    """Mahalanobis only looks at the means: same mean, very different
+    covariance merges under it but not under Hellinger."""
+    mu, _, Lam, _ = _niw()
+    pool = ([mu, mu], [1.0, 1.0], [Lam, 50 * Lam], [20.0, 21.0], np.ones(2))
+    assert len(pb._merge_models(*pool, merge_threshold=0.5)[0]) == 2
+    merged = pb._merge_models(
+        *pool,
+        merge_threshold=0.5,
+        distance_fn=pb._gaussian_mahalanobis_distance,
+    )
+    assert len(merged[0]) == 1
+
+
+def test_merge_reports_average_distance_of_the_final_pool():
+    mu, _, Lam, _ = _niw()
+    S = Lam / 20.0
+    out = pb._merge_models(
+        [mu, mu + 1.0],
+        [1.0, 1.0],
+        [Lam, Lam],
+        [20.0, 20.0],
+        np.ones(2),
+        merge_threshold=0.1,
+    )
+    assert len(out[0]) == 2  # nothing merged: one pair, its distance reported
+    assert np.isclose(
+        out[5], pb._gaussian_hellinger_distance(mu, S, mu + 1.0, S)
+    )
+    single = pb._merge_models([mu], [1.0], [Lam], [20.0], np.ones(1))
+    assert np.isnan(single[5])
+
+
+def test_closest_pair_picks_the_closest_candidates():
+    mu, _, Lam, _ = _niw()
+    pool = ([mu, mu + 1.0, mu + 1e-3], [Lam] * 3, [20.0, 21.0, 22.0])
+    i, j, dist, avg = pb._closest_pair(
+        *pool, np.ones(3), 50, 5, pb._gaussian_hellinger_distance
+    )
+    assert {i, j} == {0, 2} and dist < avg
+
+
+def test_closest_pair_without_candidates():
+    """nu too far apart: no pair is compared at all."""
+    mu, _, Lam, _ = _niw()
+    i, j, dist, avg = pb._closest_pair(
+        [mu, mu], [Lam] * 2, [10.0, 200.0], np.ones(2), 50, 5,
+        pb._gaussian_hellinger_distance,
+    )  # fmt: skip
+    assert (i, j, dist) == (-1, -1, np.inf) and np.isnan(avg)
+
+
+def test_hellinger_non_finite_is_maximal_distance():
+    """Was 0 for a NaN result (the pair would have merged)."""
+    _, _, Lam, _ = _niw()
+    nan_mean = np.full(N, np.nan)
+    assert pb._gaussian_hellinger_distance(nan_mean, Lam, np.zeros(N), Lam) == 1
+
+
+def test_sup_normalise():
+    assert np.allclose(pb._sup_normalise(np.array([0.5, 2.0])), [0.25, 1.0])
+    assert np.allclose(pb._sup_normalise(np.zeros(3)), 1.0)
 
 
 # --- aggregation -----------------------------------------------------------
@@ -301,7 +366,27 @@ def test_aggregate_mean_is_kappa_weighted():
     assert np.allclose(mu_hat, (1 * mus[0] + 3 * mus[1]) / 4)
 
 
-# --- run_core (necessity bypassed) ----------------------------------------
+# --- weighting schemes -----------------------------------------------------
+
+
+def test_scheme_weights_plain_only_without_necessity():
+    poss = np.array([1.0, 0.5, 0.2])
+    weights = pb._scheme_weights(poss, None, gamma=1.0, eta=1.0)
+    assert list(weights) == ["plain"]
+    assert np.array_equal(weights["plain"], poss)
+
+
+def test_scheme_weights_with_necessity_match_the_thesis_formulas():
+    """Thesis eq. 5.16-5.18, before normalisation."""
+    poss, nec = np.array([1.0, 0.5, 0.2]), np.array([0.0, 0.4, 1.0])
+    weights = pb._scheme_weights(poss, nec, gamma=2.0, eta=3.0)
+    assert list(weights) == ["plain", *pb.NECESSITY_SCHEMES]
+    assert np.allclose(weights["masked"], poss * (nec > 0))
+    assert np.allclose(weights["power"], poss * nec**2.0)
+    assert np.allclose(weights["exp"], poss * np.exp(-3.0 * (1 - nec)))
+
+
+# --- run_core ---------------------------------------------------------------
 
 
 def _fw(out: StrategyOutput) -> tuple[dict, pd.DataFrame]:
@@ -310,45 +395,88 @@ def _fw(out: StrategyOutput) -> tuple[dict, pd.DataFrame]:
     return out.forecast, out.weights
 
 
-def test_run_core_outputs(no_necessity, returns):
+def test_run_core_outputs(returns):
     diag, outputs = pb.run_core(returns, **RUN)
-    assert list(outputs) == ["masked", "power", "exp"]
-    (masked, w_m), (power, w_p), (exp, w_e) = map(_fw, outputs.values())
+    assert list(outputs) == ["plain"]  # necessity is off by default
+    plain, w = _fw(outputs["plain"])
     T = len(returns)
-    assert masked["mu_hat"].shape == (T, N) and masked["sigma_hat"].shape == (
-        T,
-        N,
-        N,
-    )
-    # with necessity = 1, all three weightings are plain possibility weighting
-    for other, w_o in [(power, w_p), (exp, w_e)]:
-        assert np.array_equal(other["mu_hat"], masked["mu_hat"], equal_nan=True)
-        pd.testing.assert_frame_equal(w_o, w_m)
-    assert np.isnan(masked["mu_hat"][:40]).all()
-    assert np.isfinite(masked["mu_hat"][40:]).all()
+    assert plain["mu_hat"].shape == (T, N)
+    assert plain["sigma_hat"].shape == (T, N, N)
+    assert np.isnan(plain["mu_hat"][:40]).all()
+    assert np.isfinite(plain["mu_hat"][40:]).all()
     assert list(diag.index) == list(range(40, T))
+    assert not [c for c in diag.columns if "nec" in c]
     assert (diag["n_models_post_merge"] <= diag["n_models_post_prune"]).all()
     assert (diag["n_models_post_prune"] <= RUN["max_models"]).all()
     t = 100
     assert np.allclose(
-        w_m.iloc[t], markowitz_step(masked["mu_hat"][t], masked["sigma_hat"][t])
+        w.iloc[t], markowitz_step(plain["mu_hat"][t], plain["sigma_hat"][t])
     )
 
 
-def test_run_core_covariances_symmetric_positive_definite(
-    no_necessity, returns
+def test_run_core_does_not_score_necessity_by_default(monkeypatch, returns):
+    def boom(*args, **kwargs):
+        raise AssertionError("necessity scores computed with necessity off")
+
+    monkeypatch.setattr(pb, "necessity_scores_fast", boom)
+    pb.run_core(returns, **RUN)
+
+
+def test_necessity_adds_schemes_and_leaves_plain_unchanged(
+    fake_necessity, returns
 ):
-    masked, _ = _fw(pb.run_core(returns, **RUN)[1]["masked"])
-    for S in masked["sigma_hat"][40:]:
+    """Switching necessity on adds outputs; it doesn't change the type or the
+    plain scheme (necessity never feeds back into the model pool)."""
+    _, off = pb.run_core(returns, **RUN)
+    diag, on = pb.run_core(returns, **RUN, necessity=True, n_jobs=1)
+    assert list(on) == ["plain", "masked", "power", "exp"]
+    plain_off, w_off = _fw(off["plain"])
+    plain_on, w_on = _fw(on["plain"])
+    assert np.array_equal(
+        plain_off["mu_hat"], plain_on["mu_hat"], equal_nan=True
+    )
+    pd.testing.assert_frame_equal(w_off, w_on)
+    # scores differ between models here, so power / exp differ from plain
+    for scheme in ("power", "exp"):
+        other, _ = _fw(on[scheme])
+        assert np.isfinite(other["mu_hat"][40:]).all()
+        assert not np.allclose(other["mu_hat"][40:], plain_on["mu_hat"][40:])
+    assert {"nec_mean", "nec_max", "frac_nec_zero"} <= set(diag.columns)
+
+
+def test_necessity_of_one_reduces_every_scheme_to_plain(monkeypatch, returns):
+    monkeypatch.setattr(
+        pb, "necessity_scores_fast", lambda y_next, mus, **kw: np.ones(len(mus))
+    )
+    _, outputs = pb.run_core(returns, **RUN, necessity=True)
+    plain, w = _fw(outputs["plain"])
+    for scheme in pb.NECESSITY_SCHEMES:
+        other, w_o = _fw(outputs[scheme])
+        assert np.array_equal(other["mu_hat"], plain["mu_hat"], equal_nan=True)
+        pd.testing.assert_frame_equal(w_o, w)
+
+
+def test_diagnostics_are_indexed_like_the_returns(returns):
+    dated = returns.set_axis(
+        pd.bdate_range("2000-01-03", periods=len(returns), name="Date")
+    )
+    diag, _ = pb.run_core(dated, **RUN)
+    assert diag.index.equals(dated.index[40:]) and diag.index.name == "Date"
+    assert pb.run_core(returns, **RUN)[0].index.name == "t"  # row numbers
+
+
+def test_run_core_covariances_symmetric_positive_definite(returns):
+    plain, _ = _fw(pb.run_core(returns, **RUN)[1]["plain"])
+    for S in plain["sigma_hat"][40:]:
         assert np.allclose(S, S.T) and np.linalg.eigvalsh(S).min() > 0
 
 
-def test_run_core_uses_returns_up_to_t_only(no_necessity, returns):
+def test_run_core_uses_returns_up_to_t_only(returns):
     t = 100
-    a, _ = _fw(pb.run_core(returns, **RUN)[1]["masked"])
+    a, _ = _fw(pb.run_core(returns, **RUN)[1]["plain"])
     changed = returns.copy()
     changed.iloc[t + 1 :] = 0.5
-    b, _ = _fw(pb.run_core(changed, **RUN)[1]["masked"])
+    b, _ = _fw(pb.run_core(changed, **RUN)[1]["plain"])
     assert np.allclose(
         a["mu_hat"][: t + 1], b["mu_hat"][: t + 1], equal_nan=True
     )
@@ -357,19 +485,56 @@ def test_run_core_uses_returns_up_to_t_only(no_necessity, returns):
     )
 
 
-def test_run_core_weights_start_at_start(no_necessity, returns):
+def test_run_core_weights_start_at_start(returns):
     """Forecasts from burn_in (warm-up), weights only from start."""
     _, outputs = pb.run_core(returns, **RUN)
-    masked, _ = _fw(outputs["masked"])
+    plain, w = _fw(outputs["plain"])
     burn, start = RUN["burn_in"], RUN["start"]
-    assert np.isfinite(masked["mu_hat"][burn:start]).all()
-    for w in (o.weights for o in outputs.values()):
-        assert w.iloc[:start].isna().all().all()
-        assert w.iloc[start:-1].notna().all().all()
+    assert np.isfinite(plain["mu_hat"][burn:start]).all()
+    assert w.iloc[:start].isna().all().all()
+    assert w.iloc[start:-1].notna().all().all()
 
 
-def test_theta_reaches_the_weights(returns, no_necessity):
+def test_theta_reaches_the_weights(returns):
     """theta was ignored before (always 1): unconstrained weights scale 1/theta."""
-    w1 = pb.run_core(returns, **RUN, theta=1.0)[1]["masked"].weights
-    w2 = pb.run_core(returns, **RUN, theta=2.0)[1]["masked"].weights
+    w1 = pb.run_core(returns, **RUN, theta=1.0)[1]["plain"].weights
+    w2 = pb.run_core(returns, **RUN, theta=2.0)[1]["plain"].weights
     np.testing.assert_allclose(w2.to_numpy(), w1.to_numpy() / 2.0)
+
+
+def test_failed_aggregation_is_reported_not_swallowed(monkeypatch, returns):
+    """Was `except Exception: pass`: NaN rows with no trace."""
+    real = pb._aggregate_possibilistic_niw
+    calls = {"n": 0}
+
+    def flaky(*args):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise ValueError("Aggregated kappa must be strictly positive.")
+        mu, Sigma = real(*args)
+        if calls["n"] == 5:
+            mu = np.full_like(mu, np.inf)
+        return mu, Sigma
+
+    monkeypatch.setattr(pb, "_aggregate_possibilistic_niw", flaky)
+    with pytest.warns(RuntimeWarning) as caught:
+        _, outputs = pb.run_core(returns, **RUN)
+    message = str(caught[0].message)
+    assert "possibilistic: 2 of 110 forecast rows left NaN" in message
+    assert "aggregation failed: 1" in message
+    assert "non-finite forecast: 1" in message
+    plain, _ = _fw(outputs["plain"])
+    assert np.isnan(plain["mu_hat"][[42, 44]]).all()
+    assert np.isfinite(plain["mu_hat"][[41, 43, 45]]).all()
+
+
+def test_clean_run_gives_no_warning(returns):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        pb.run_core(returns, **RUN)
+
+
+def test_burn_in_longer_than_the_data_raises(returns):
+    """Was silently shortened to half the data."""
+    with pytest.raises(ValueError, match="burn_in"):
+        pb.run_core(returns, start=500, burn_in=500)
