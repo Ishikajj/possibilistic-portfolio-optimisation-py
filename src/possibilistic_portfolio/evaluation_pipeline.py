@@ -20,10 +20,17 @@ All strategies are scored over one common window: from the latest first
 weight row in the folder (see ``evaluation_start``).
 
 Entry point: ``run_evaluation(folder, rf_series=load_rf(folder))``.
+
+Command line: evaluate every dataset folder of a run (default
+``config.RESULTS_DIR``; another run folder as argument, relative to dev/;
+``--help`` for the usage)::
+
+    uv run python -m possibilistic_portfolio.evaluation_pipeline [run_folder]
 """
 
 from __future__ import annotations
 
+import argparse
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -33,7 +40,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from possibilistic_portfolio.config import RESULTS_DIR, RF_PATH, SCALING_FACTOR
+from possibilistic_portfolio.config import (
+    RESULTS_DIR,
+    RF_PATH,
+    ROOT,
+    SCALING_FACTOR,
+)
 from possibilistic_portfolio.data_input import load_risk_free
 from possibilistic_portfolio.distribution_evaluation_functions import (
     mahalanobis_distance_series,
@@ -438,7 +450,24 @@ def run_evaluation(
     return results
 
 
-if __name__ == "__main__":
-    for folder in sorted(RESULTS_DIR.iterdir()):
+def _cli() -> None:
+    parser = argparse.ArgumentParser(
+        description="Evaluate every dataset folder of a run folder."
+    )
+    parser.add_argument(
+        "run_folder",
+        nargs="?",
+        type=Path,
+        default=RESULTS_DIR,
+        help=f"run folder (default {RESULTS_DIR.name}/); relative to dev/",
+    )
+    run_folder = ROOT / parser.parse_args().run_folder  # absolute stays
+    if not run_folder.is_dir():
+        parser.error(f"{run_folder} is not a folder")
+    for folder in sorted(run_folder.iterdir()):
         if folder.is_dir():
             run_evaluation(folder, rf_series=load_rf(folder))
+
+
+if __name__ == "__main__":
+    _cli()
