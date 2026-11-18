@@ -16,8 +16,6 @@ import pytest
 
 from possibilistic_portfolio import niw
 from possibilistic_portfolio import possibilistic_bayesian as pb
-from possibilistic_portfolio.markowitz import markowitz_step
-from possibilistic_portfolio.predictive import StrategyOutput
 
 N = 3
 
@@ -389,16 +387,12 @@ def test_scheme_weights_with_necessity_match_the_thesis_formulas():
 # --- run_core ---------------------------------------------------------------
 
 
-def _fw(out: StrategyOutput) -> tuple[dict, pd.DataFrame]:
-    """(forecast, weights) of one weighting scheme."""
-    assert out.forecast is not None
-    return out.forecast, out.weights
-
-
 def test_run_core_outputs(returns):
-    diag, outputs = pb.run_core(returns, **RUN)
-    assert list(outputs) == ["plain"]  # necessity is off by default
-    plain, w = _fw(outputs["plain"])
+    """One forecast per weighting scheme, from burn_in on (rows burn_in …
+    start-1 are warm-up; weights come from the pipeline, weight_rules)."""
+    diag, forecasts = pb.run_core(returns, **RUN)
+    assert list(forecasts) == ["plain"]  # necessity is off by default
+    plain = forecasts["plain"]
     T = len(returns)
     assert plain["mu_hat"].shape == (T, N)
     assert plain["sigma_hat"].shape == (T, N, N)
@@ -408,10 +402,6 @@ def test_run_core_outputs(returns):
     assert not [c for c in diag.columns if "nec" in c]
     assert (diag["n_models_post_merge"] <= diag["n_models_post_prune"]).all()
     assert (diag["n_models_post_prune"] <= RUN["max_models"]).all()
-    t = 100
-    assert np.allclose(
-        w.iloc[t], markowitz_step(plain["mu_hat"][t], plain["sigma_hat"][t])
-    )
 
 
 def test_run_core_does_not_score_necessity_by_default(monkeypatch, returns):
@@ -425,20 +415,17 @@ def test_run_core_does_not_score_necessity_by_default(monkeypatch, returns):
 def test_necessity_adds_schemes_and_leaves_plain_unchanged(
     fake_necessity, returns
 ):
-    """Switching necessity on adds outputs; it doesn't change the type or the
-    plain scheme (necessity never feeds back into the model pool)."""
+    """Switching necessity on adds forecasts; it doesn't change the plain
+    scheme (necessity never feeds back into the model pool)."""
     _, off = pb.run_core(returns, **RUN)
     diag, on = pb.run_core(returns, **RUN, necessity=True, n_jobs=1)
     assert list(on) == ["plain", "masked", "power", "exp"]
-    plain_off, w_off = _fw(off["plain"])
-    plain_on, w_on = _fw(on["plain"])
-    assert np.array_equal(
-        plain_off["mu_hat"], plain_on["mu_hat"], equal_nan=True
-    )
-    pd.testing.assert_frame_equal(w_off, w_on)
+    plain_off, plain_on = off["plain"], on["plain"]
+    for key in ("mu_hat", "sigma_hat"):
+        assert np.array_equal(plain_off[key], plain_on[key], equal_nan=True)
     # scores differ between models here, so power / exp differ from plain
     for scheme in ("power", "exp"):
-        other, _ = _fw(on[scheme])
+        other = on[scheme]
         assert np.isfinite(other["mu_hat"][40:]).all()
         assert not np.allclose(other["mu_hat"][40:], plain_on["mu_hat"][40:])
     assert {"nec_mean", "nec_max", "frac_nec_zero"} <= set(diag.columns)
@@ -448,12 +435,13 @@ def test_necessity_of_one_reduces_every_scheme_to_plain(monkeypatch, returns):
     monkeypatch.setattr(
         pb, "necessity_scores_fast", lambda y_next, mus, **kw: np.ones(len(mus))
     )
-    _, outputs = pb.run_core(returns, **RUN, necessity=True)
-    plain, w = _fw(outputs["plain"])
+    _, forecasts = pb.run_core(returns, **RUN, necessity=True)
+    plain = forecasts["plain"]
     for scheme in pb.NECESSITY_SCHEMES:
-        other, w_o = _fw(outputs[scheme])
-        assert np.array_equal(other["mu_hat"], plain["mu_hat"], equal_nan=True)
-        pd.testing.assert_frame_equal(w_o, w)
+        for key in ("mu_hat", "sigma_hat"):
+            assert np.array_equal(
+                forecasts[scheme][key], plain[key], equal_nan=True
+            )
 
 
 def test_diagnostics_are_indexed_like_the_returns(returns):
@@ -466,40 +454,23 @@ def test_diagnostics_are_indexed_like_the_returns(returns):
 
 
 def test_run_core_covariances_symmetric_positive_definite(returns):
-    plain, _ = _fw(pb.run_core(returns, **RUN)[1]["plain"])
+    plain = pb.run_core(returns, **RUN)[1]["plain"]
     for S in plain["sigma_hat"][40:]:
         assert np.allclose(S, S.T) and np.linalg.eigvalsh(S).min() > 0
 
 
 def test_run_core_uses_returns_up_to_t_only(returns):
     t = 100
-    a, _ = _fw(pb.run_core(returns, **RUN)[1]["plain"])
+    a = pb.run_core(returns, **RUN)[1]["plain"]
     changed = returns.copy()
     changed.iloc[t + 1 :] = 0.5
-    b, _ = _fw(pb.run_core(changed, **RUN)[1]["plain"])
+    b = pb.run_core(changed, **RUN)[1]["plain"]
     assert np.allclose(
         a["mu_hat"][: t + 1], b["mu_hat"][: t + 1], equal_nan=True
     )
     assert np.allclose(
         a["sigma_hat"][: t + 1], b["sigma_hat"][: t + 1], equal_nan=True
     )
-
-
-def test_run_core_weights_start_at_start(returns):
-    """Forecasts from burn_in (warm-up), weights only from start."""
-    _, outputs = pb.run_core(returns, **RUN)
-    plain, w = _fw(outputs["plain"])
-    burn, start = RUN["burn_in"], RUN["start"]
-    assert np.isfinite(plain["mu_hat"][burn:start]).all()
-    assert w.iloc[:start].isna().all().all()
-    assert w.iloc[start:-1].notna().all().all()
-
-
-def test_theta_reaches_the_weights(returns):
-    """theta was ignored before (always 1): unconstrained weights scale 1/theta."""
-    w1 = pb.run_core(returns, **RUN, theta=1.0)[1]["plain"].weights
-    w2 = pb.run_core(returns, **RUN, theta=2.0)[1]["plain"].weights
-    np.testing.assert_allclose(w2.to_numpy(), w1.to_numpy() / 2.0)
 
 
 def test_failed_aggregation_is_reported_not_swallowed(monkeypatch, returns):
@@ -518,12 +489,12 @@ def test_failed_aggregation_is_reported_not_swallowed(monkeypatch, returns):
 
     monkeypatch.setattr(pb, "_aggregate_possibilistic_niw", flaky)
     with pytest.warns(RuntimeWarning) as caught:
-        _, outputs = pb.run_core(returns, **RUN)
+        _, forecasts = pb.run_core(returns, **RUN)
     message = str(caught[0].message)
     assert "possibilistic: 2 of 110 forecast rows left NaN" in message
     assert "aggregation failed: 1" in message
     assert "non-finite forecast: 1" in message
-    plain, _ = _fw(outputs["plain"])
+    plain = forecasts["plain"]
     assert np.isnan(plain["mu_hat"][[42, 44]]).all()
     assert np.isfinite(plain["mu_hat"][[41, 43, 45]]).all()
 

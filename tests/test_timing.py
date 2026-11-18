@@ -15,7 +15,7 @@ long-only, saved files, evaluation_pipeline metrics) gets the same look-ahead
 check on every row-level output.
 
 The exact pairings are pinned in the module tests: weights row t = Markowitz
-on forecast row t (test_markowitz.py), weights at t earn the returns at t+1
+on forecast row t (test_weight_rules.py), weights at t earn the returns at t+1
 (test_portfolio_evaluation_functions.py), forecast at t scores the returns at
 t+1 (test_distribution_evaluation_functions.py).
 """
@@ -29,7 +29,7 @@ from possibilistic_portfolio import bayesian_averaging as ba
 from possibilistic_portfolio import evaluation_pipeline as ev
 from possibilistic_portfolio import pipeline_wrapper as pw
 from possibilistic_portfolio import possibilistic_bayesian as pb
-from possibilistic_portfolio.predictive import StrategyOutput
+from possibilistic_portfolio import weight_rules as wr
 
 T, N = 150, 3
 BURN, START, WIN = 40, 60, 30
@@ -46,41 +46,44 @@ def returns() -> pd.DataFrame:
     )
 
 
-def _pair(out: StrategyOutput) -> tuple[dict | None, pd.DataFrame]:
-    return out.forecast, out.weights
+def _with_weights(forecast: dict, r: pd.DataFrame) -> tuple[dict, pd.DataFrame]:
+    """(forecast, its Markowitz weights), as the pipeline makes them."""
+    return forecast, wr.markowitz_unconstrained(forecast, r, start=START)
 
 
 def _possibilistic(r):
     # plain possibility weighting (necessity is off by default)
-    _, outputs = pb.run_core(r, burn_in=BURN, start=START, max_models=15)
-    return [_pair(o) for o in outputs.values()]
+    _, forecasts = pb.run_core(r, burn_in=BURN, start=START, max_models=15)
+    return [_with_weights(f, r) for f in forecasts.values()]
 
 
 # name -> returns_df -> list of (forecast dict or None, weights DataFrame)
 ALGOS = {
-    "equal_weight": lambda r: [
-        _pair(air.equal_weight_strategy(r, start=START))
-    ],
-    "market_weight": lambda r: [
-        _pair(air.market_weight_strategy(r, start=START))
-    ],
+    "equal_weight": lambda r: [(None, wr.equal_weights(r, start=START))],
+    "market_weight": lambda r: [(None, wr.market_weights(r, start=START))],
     "minimum_variance": lambda r: [
-        _pair(air.minimum_variance_strategy(r, start=START, window=WIN))
+        (None, wr.minimum_variance_weights(r, start=START, window=WIN))
     ],
     "historical_expanding": lambda r: [
-        _pair(air.historical_expectations_weights(r, start=START))
+        _with_weights(air.historical_expanding_forecast(r, start=START), r)
     ],
     "rolling_window": lambda r: [
-        _pair(air.rolling_window_weights(r, start=START, window=WIN))
+        _with_weights(
+            air.rolling_window_forecast(r, start=START, window=WIN), r
+        )
     ],
     "jorion_bayes_stein": lambda r: [
-        _pair(air.jorion_bayes_stein_strategy(r, start=START, window=WIN))
+        _with_weights(
+            air.jorion_bayes_stein_forecast(r, start=START, window=WIN), r
+        )
     ],
     "kan_zhou_three_fund": lambda r: [
-        _pair(air.kan_zhou_three_fund_strategy(r, start=START, window=WIN))
+        _with_weights(
+            air.kan_zhou_three_fund_forecast(r, start=START, window=WIN), r
+        )
     ],
     "bayesian_averaging": lambda r: [
-        _pair(ba.run_core(r, burn_in=BURN, start=START))
+        _with_weights(ba.run_core(r, burn_in=BURN, start=START), r)
     ],
     "possibilistic": _possibilistic,
 }

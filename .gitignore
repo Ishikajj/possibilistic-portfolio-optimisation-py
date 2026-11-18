@@ -13,8 +13,9 @@ dist/
 build/
 *.egg-info/
 
-# editors
-.vscode/
+# editors (the shared VS Code settings are versioned: ruff on save, Pylance)
+.vscode/*
+!.vscode/settings.json
 .idea/
 
 #working files
@@ -24,6 +25,8 @@ build/
 *.npz
 *.pkl
 CLAUDE.md
+# local full run of 2026-11-17 (2.5 GB; code version unclear): kept on disk only
+results_baseline/
 
 
 # mac

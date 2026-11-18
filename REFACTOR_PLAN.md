@@ -1,6 +1,6 @@
 # Refactor plan: src layout + tests
 
-Branch: `post-fyp`. FYP reference state: `dev` @ `e57fd62`.
+Branch: `post-fyp`; the last open points were finished on `refactor-finish` (2026-11-17, see "Finish-line status" below). FYP reference state: `dev` @ `e57fd62`.
 
 How we work: one file at a time → outline tests → write + run them → list edge cases → decide changes → commit.
 Main goal: remove duplication and confusing structure; edge cases second.
@@ -22,6 +22,18 @@ Nothing gets changed without a yes.
 
 Anything not on this list goes to `TOOLING_TODO.md` as "after the paper".
 
+### Finish-line status (2026-11-17, branch `refactor-finish`)
+
+1. Done (2026-11-16).
+2. Done: every open point of 2.5, 2.7, 2.9, 2.10 below is closed (marked `[x]` with what was done).
+3. Done: plain possibility weighting is the default (`possibilistic_plain`); necessity is a switch (`config.USE_NECESSITY`, `RunSettings(necessity=True)`, `--necessity`) that adds the masked / power / exp schemes without changing the output type. Nothing of `faster_necessity.py` was removed.
+4. Done: nothing open under Primary.
+5. Done: all three snapshot references regenerated from the final code (`reference_no_necessity.npz`, `necessity_baseline.npz`, and the real-necessity `reference.npz`); full rerun in `results_baseline/`, see "Full rerun" at the end of this file.
+
+Nothing in this file is open. The only `[~]` (deferred) marks left are decisions taken on purpose: notebooks keep showing the FYP results, two script cosmetics (2.12), the unused archive, GPU necessity (not installed), and in `TOOLING_TODO.md` the two research-design points for the paper (merge ν, simulated-data settings).
+
+What changed results on 2026-11-17 (each checked against the previous snapshot, list in `tests/test_snapshots.py`): Kan-Zhou (formula + forecast), unconstrained weights in the 13th digit (`solve`), `keep_newest` pruning (not on the snapshot slices). Everything else bit for bit.
+
 `[ ]` open · `[x]` done · `[?]` needs your decision · `[~]` deferred
 
 ---
@@ -35,6 +47,7 @@ Anything not on this list goes to `TOOLING_TODO.md` as "after the paper".
   - `config.py` holds all constants + run parameters: paths (`DATASETS_DIR`, `SIM_DATA_DIR`, `RF_PATH`), `RESULTS_DIR` (set per run), `START_DATE`, file markers, `BURN_IN`, `PERIODS_UNTIL_INVESTMENT`, `THETA`, `MAX_MODELS`, merge params, rolling windows, `DEVICE`, … Importable from scripts and notebooks.
   - Each run writes the settings it used to `<run folder>/config.json`. Notebooks analysing a past run read that file, not `config.py`.
   - Pipeline refuses to write into a run folder that already exists (protects past runs).
+  - [x] Implemented 2026-11-17 (`pipeline_wrapper`): `record_run_config` writes `<run folder>/config.json` (`SCALING_FACTOR`, the `RunSettings`, `start`, and per call: time, git commit, datasets, date window, algorithms); a run folder made with other settings raises; a dataset folder that already exists raises (`FileExistsError`, nothing is overwritten). `--out <folder>` on the command line picks the run folder; `evaluation_pipeline` takes the run folder as argument.
   - [x] `config.json` written by hand (2026-11-13) for both existing runs; each file notes its source commit and which values are confirmed from the outputs vs taken from code only.
     - `results_fyp_submitted/` — read-only. Apr 14, code `4e8cb38`, `DEVICE="cuda"`, sim T=10000 N=10, `MAX_MODELS=100`.
     - `results_cpu/` — superseded. Real data: Mar 28–29, code `5274011`, `MAX_MODELS=80`. Simulated: Apr 2–3, T=6000 N=5, runner uncommitted at the time, settings inferred from `ba2b8e4` (`MERGE_THRESHOLD=1.0`). Odd folder `6_Portfolios_size_btm_rename_weighted`.
@@ -43,12 +56,12 @@ Anything not on this list goes to `TOOLING_TODO.md` as "after the paper".
   - Two slices, 1400 rows each: real (10 Industry VW, 3 portfolios + `Mkt-RF`, from 1980) and simulated (`iid_T10000_N10_seed42`, 3 assets). `burn_in=300`, `piu=100`, `max_models=20`, CPU, real necessity (`--bypass-necessity` optional).
   - Covers: `data_input` end to end (VW + EW blocks of 10 Industry, RF), the whole `calculate_all_functions_perdatasets` output (all 11 methods + long-only + diagnostics) and `run_evaluation` output (scalars, rolling Sharpe, log-likelihood, Mahalanobis). Compared exactly (bit for bit).
   - Not covered: `call_all_datasets` / `call_all_simulated_datasets` loops, `main()`s, GPU path, other simulated DGPs.
-  - [ ] Turn the `--compare` run into a pytest test (`tests/test_snapshots.py`).
+  - [x] (done: `tests/test_snapshots.py`) Turn the `--compare` run into a pytest test (`tests/test_snapshots.py`).
   - Finding (2026-11-15): `reference_no_necessity.npz` (made 13 Nov) had long-only weights ~1e-12 off from any run today, so `tests/test_snapshots.py` failed on unchanged code. Same code, NumPy/SciPy versions and inputs; reruns deterministic → one-off quirk of the run that made it (BLAS/threads?). Regenerated from `dev`; current `post-fyp` code matches it bit for bit, test green. `reference.npz` (real necessity, same night) not re-checked (~80 min).
   - Finding: `evaluation_pipeline.py` `__main__` reads a simulated run's `rf.csv` with `index_col=0` → expects a `Date` column. The simulated CSVs were regenerated on 2026-04-27 without `Date`, so the pipeline now writes a Date-less `rf.csv` and evaluating a new simulated run would fail (`KeyError: 'RF'`). Old run folders (with `Date`) still work.
 - [x] **0.6 Generated outputs + leftovers** (done 2026-11-13, not committed):
   - `src/weight_distributions*.png` deleted by user (in history).
-  - New gitignored `figures/` for anything regenerable. [ ] In Part 1: `config.FIGURES_DIR`; `plot_weight_distributions.py` and `table1_summary_stats.py` write there instead of `src/`.
+  - New gitignored `figures/` for anything regenerable. [x] (done in Part 1) `config.FIGURES_DIR`; `plot_weight_distributions.py` and `table1_summary_stats.py` write there instead of `src/`.
   - `predictive_diagnostics.ipynb`: removed last cell `Image("src/weight_distributions.png")` (file gone).
   - `src/tests/` 3 diagnostic PNGs (Mar 24–25, code no longer exists) → `archive/diagnostic_figures/` (tracked). Rest of `src/tests/` deleted (in history; local copies only differed by the Nov 6 ruff formatting).
   - `diagnostics_26_march/` deleted (never committed; old run, code since fixed).
@@ -121,7 +134,7 @@ Done as its own step, before 2.11; the timing fix (benchmarks at t-1) stays sepa
 - `evaluation_pipeline`: reads dates back; refuses weights whose index differs from `returns.csv`; `load_rf(folder)` (dated `rf.csv` / Date-less simulated `rf.csv` / legacy global RF by row) replaces the `__main__` logic.
 - Tests: `tests/test_predictive.py` (6), dates reach every output, misaligned weights / forecasts raise, RF by date / row / legacy, Sharpe test + CE by date. Old FYP folders evaluate identically to the previous commit.
 - [~] Notebooks load `*_mus.npy` / `*_sigmas.npy` directly: left as is on purpose (2026-11-16) — they show the FYP results with saved outputs. New notebooks later will use `predictive.load_predictive` / `evaluation_pipeline.load_strategy_outputs`.
-- [ ] `possibilistic_diagnostics.csv` is still indexed by step `t`, not date (2.9).
+- [x] (done 2026-11-17: indexed like the returns from `burn_in` on — dates for real data, row number `t` for simulated; necessity columns only when necessity is on) `possibilistic_diagnostics.csv` is still indexed by step `t`, not date (2.9).
 
 ### 2.1 `markowitz.py` — [x] done 2026-11-15 (not committed)
 Used by: `bayesian_averaging`, `possibilistic_bayesian`, `alternative_investment_rules` (unconstrained); `pipeline_wrapper` (long-only).
@@ -208,13 +221,13 @@ Bugs / checks (TOOLING_TODO): Kan-Zhou saved mean scaled by h; verify Kan-Zhou b
   - Bayesian (2.7): `burn_in`, `start`, plus `theta` and `max_models` it doesn't get today (→ fixes P3);
   - possibilistic (2.9): `burn_in`, `start`, merge settings (`max_models`, `merge_threshold`, `nu_bandwidth`, `k_neighbours`) and the necessity settings (`gamma`, `eta`, `device`) — **necessity must keep working** until finish-line item 3 decides on it.
   The pipeline (P1 / P2) is built on the same design afterwards. Snapshot bit for bit.
-- [ ] TOOLING_TODO bugs fixed in this step: Kan-Zhou saved mean scaled by h (**results change**: long-only weights + scoring); verify the Kan-Zhou incomplete-beta parameters against the paper.
+- [x] (done 2026-11-17: forecast = (μ\*, Σ̂/h); adjusted ψ² as Kan & Zhou eq. 66 — details in TOOLING_TODO) TOOLING_TODO bugs fixed in this step: Kan-Zhou saved mean scaled by h (**results change**: long-only weights + scoring); verify the Kan-Zhou incomplete-beta parameters against the paper.
 
 Edge-case notes:
-- [?] `minimum_variance_strategy` uses `np.linalg.inv` → singular window crashes (same as Markowitz).
-- [ ] Jorion / Kan-Zhou skip a row silently (NaN weights) when q ≤ 0, ψ < 0, or the beta is non-finite — no count. Also `_minvar_mean_target` → NaN on a zero / non-finite denominator. → Report with counts per reason (Part 2 NaN rule).
-- [?] Kan-Zhou ε can be negative → v outside (0,1) (no check).
-- [?] Jorion / Kan-Zhou compute moments up to T-2; historical / rolling up to T-1 (last row has no use anyway).
+- [x] (done 2026-11-17: `_solve_or_pinv`; a window whose weights can't be normalised → NaN row, counted in a warning) `minimum_variance_strategy` uses `np.linalg.inv` → singular window crashes (same as Markowitz).
+- [x] (done 2026-11-17: one `RuntimeWarning` per call with counts per reason, via `predictive.warn_nan_rows` (shared with Markowitz and possibilistic); tested with an all-zero window) Jorion / Kan-Zhou skip a row silently (NaN weights) when q ≤ 0, ψ < 0, or the beta is non-finite — no count. Also `_minvar_mean_target` → NaN on a zero / non-finite denominator. → Report with counts per reason (Part 2 NaN rule).
+- [x] (closed 2026-11-17: the adjusted estimator is positive by construction (→ 0 as ψ² → 0), so v ∈ (0, 1]; a non-positive value is counted as a skipped row; tested) Kan-Zhou ε can be negative → v outside (0,1) (no check).
+- [x] (done 2026-11-17: both now forecast every row from their start, like the others; only the weights' last row is NaN) Jorion / Kan-Zhou compute moments up to T-2; historical / rolling up to T-1 (last row has no use anyway).
 - [x] `_incomplete_beta_unregularized`: dead `if _betainc is not None` branch (TODO item), docstring typo "incomp2lete". Done 2026-11-16 with the type-error cleanup (no result change).
 
 ### 2.6 `simulated_datasets.py` — [x] done 2026-11-16 (tests drafted 2026-11-13)
@@ -235,18 +248,25 @@ Correction: `sharing_prior_update` IS used (called every step in `run_core`); ea
 Existing TODO: P3 (θ, `max_models` not passed). P4 (`t-1`/`t-2` denominators in `_new_model_prior`) fixed 2026-11-16 (`2c8a4e8`).
 
 - [x] (2026-11-16) Arguments via the shared design from 2.5 → `theta` and `max_models` passed in (fixes P3). `max_models` stays a separate setting (`config.BAYESIAN_MAX_MODELS` = 2000 vs possibilistic 100), passed explicitly by the pipeline.
-- [ ] TOOLING_TODO bug fixed in this step (with 2.9): `keep_newest` pruning evicts the wrong model (xfail test; **results change**).
+- [x] (done 2026-11-17: `niw.top_models`) TOOLING_TODO bug fixed in this step (with 2.9): `keep_newest` pruning evicts the wrong model (xfail test; **results change**).
 
-- [ ] **Duplication (with 2.9):** `_new_model_prior`, `_update_niw`, `_update_all_models` are exact copies in `bayesian_averaging.py` and `possibilistic_bayesian.py` (tested identical / same results). Keep one copy and import it in the other. Decided 2026-11-16: a small shared module (e.g. `niw.py`) that both import — possibilistic is the core of the project, so neither method should depend on the other. The burn-in setup of `sum_R` / `sum_R2` in both `run_core`s is duplicated too. Values must stay bit for bit.
+- [x] (done 2026-11-17, bit for bit: `niw.py` holds `new_model_prior`, `update_niw`, `update_all_models`, `burn_in_sums`, `top_models`, `select_models`; tests in `tests/test_niw.py`) **Duplication (with 2.9):** `_new_model_prior`, `_update_niw`, `_update_all_models` are exact copies in `bayesian_averaging.py` and `possibilistic_bayesian.py` (tested identical / same results). Keep one copy and import it in the other. Decided 2026-11-16: a small shared module (e.g. `niw.py`) that both import — possibilistic is the core of the project, so neither method should depend on the other. The burn-in setup of `sum_R` / `sum_R2` in both `run_core`s is duplicated too. Values must stay bit for bit.
 
 Edge-case notes:
-- [?] `burn_obs = min(burn_in, T // 2)` silently shortens the burn-in on short data (same as possibilistic).
-- [?] `_prune_models` default `max_models=500`, `run_core` default 2000, pipeline passes nothing → 2000 (vs 100 for possibilistic). → `config.py`.
-- [?] Progress `print` every 100 steps (noisy in tests/pipelines; logging?).
-- [?] `main()` loads data from the default `DATA_PATH` (dev helper, not used by the pipeline).
+- [x] (done 2026-11-17: raises `ValueError` unless `0 <= burn_in <= start` and `burn_in < T`) `burn_obs = min(burn_in, T // 2)` silently shortens the burn-in on short data (same as possibilistic).
+- [x] (done 2026-11-17: both `_prune_models` take their defaults from config) `_prune_models` default `max_models=500`, `run_core` default 2000, pipeline passes nothing → 2000 (vs 100 for possibilistic). → `config.py`.
+- [x] (done 2026-11-17: one line every 1000 steps, labelled with the method; silent in tests. No logging framework.) Progress `print` every 100 steps (noisy in tests/pipelines; logging?).
+- [x] (closed 2026-11-17, kept: a dev demo; a single algorithm can also be run with `--algorithms`) `main()` loads data from the default `DATA_PATH` (dev helper, not used by the pipeline).
 
-### 2.8 `faster_necessity.py` — [~] no tests
-Necessity is being removed from the project. No unit tests for this file.
+### 2.8 `faster_necessity.py` — [x] tests written 2026-11-17
+Skipped at first because necessity was going to be removed; it stays as an option (off by default), so it got tests after all. The file itself is unchanged except one edge-case fix and a docstring note.
+
+Tests (`tests/test_faster_necessity.py`, 26 passing, ~3 s, CPU path): log kernel == formula, invalid Σ → −inf, mode = (μ₀, Λ/ν) and maximises the kernel; closed-form z\* (thesis eq. 5.13) == formula and maximises over z; reduced objective == (1 − h̄)·f̄; **the 1-D reduction == brute-force supremum over μ** for a fixed Σ (eq. 5.15, at the mean, near it, far from it); Cholesky pack / unpack round trip; deterministic seeds SPD; inverse-Wishart samples (ν ≤ n−1 → none, single sample shape); scores in [0, 1], reproducible for a seed, 0 far from the model, highest at the model mean and below its analytic bound, more search never raises a score, joblib == serial, empty pool, bad arguments; the three weighting schemes == thesis eq. 5.16–5.18, necessity 1 leaves possibilities unchanged, all-masked falls back to the possibilities, bad arguments raise.
+Also covered: `tests/snapshots/necessity_baseline.py` (real scores through `run_core`, ~5 min, bit for bit) and `make_snapshots.py --necessity` (whole pipeline, ~80 min).
+
+- [x] Found by the brute-force test and fixed: `_optimal_z_for_t` returned 0 for d² = 0 (return exactly at the model mean) → necessity 1 instead of the true value. One condition removed; the GPU code never had it. No effect on real data (d² is never exactly 0; necessity baseline bit for bit).
+- [x] Documented in the module docstring: the reduction assumes n ≥ 2.
+- [~] GPU path: not tested (PyTorch not installed, GPU scoring no longer planned).
 
 ### 2.9 `possibilistic_bayesian.py` — [x] tests drafted 2026-11-13 (necessity bypassed)
 Tests (`tests/test_possibilistic_bayesian.py`, 21 passing + 3 xfail = logged bugs): newborn prior = pooled sample mean / variance, newborn possibility 1 with κ=ν=1, log score == docstring formula, possibility update == sup-normalised Bayes (max 1), all-invalid → ones, NIW update identical to Bayesian, pruning (under cap, top-k by possibility, length check), merge of two models (statistics, ν floor), Hellinger (0 for identical, symmetric, 1-D closed form), merge core (close pair merged, far kept, ν bandwidth), aggregation (single model = its mode, scale-invariant weights, κ-weighted mean), `run_core` with necessity = 1 (all three outputs identical, NaN layout, diagnostics, pool ≤ max_models, weights == Markowitz, Σ̂ SPD, **no look-ahead**).
@@ -254,15 +274,15 @@ Tests (`tests/test_possibilistic_bayesian.py`, 21 passing + 3 xfail = logged bug
 Bugs (TOOLING_TODO, xfail tests): ~~weights start at row 500 not 1000~~ fixed 2026-11-16; `keep_newest` pruning evicts the wrong model (also Bayesian); Mahalanobis merge distance √2 off (only `results_cpu` used it).
 
 - [x] (2026-11-16) Arguments via the shared design from 2.5; necessity settings (`gamma`, `eta`, `device`) kept and working until the necessity decision (finish-line item 3). Also takes `theta` now.
-- [ ] TOOLING_TODO bugs fixed in this step: `keep_newest` pruning (with 2.7, **results change**); silent `except Exception: pass` in `run_core` + `burn_obs = min(burn_in, T // 2)` silently shortening the burn-in; Mahalanobis merge distance √2 off (unused by current runs).
+- [x] (done 2026-11-17: all three, see TOOLING_TODO) TOOLING_TODO bugs fixed in this step: `keep_newest` pruning (with 2.7, **results change**); silent `except Exception: pass` in `run_core` + `burn_obs = min(burn_in, T // 2)` silently shortening the burn-in; Mahalanobis merge distance √2 off (unused by current runs).
 
 Edge-case notes:
-- [ ] **Duplication (with 2.7):** `_new_model_prior`, `_update_niw`, `_update_all_models` are exact copies of the Bayesian ones → one shared module (see 2.7).
-- [?] Merging floors ν at n+2, but newborn possibilistic models start at ν=1 → merging two young models jumps ν up.
-- [?] Merge diagnostic `hellinger_avg` is the average from the *last* merge pass only (reset each pass).
-- [?] Hellinger returns 1.0 (max distance) on numerical failure, silently.
-- [?] `_prune_models` docstring mentions a threshold the function no longer has.
-- [ ] `except Exception: pass` around aggregation → report with counts (Part 2 NaN rule); `burn_obs = min(burn_in, T // 2)` (TODO item).
+- [x] (done 2026-11-17: `niw.py`) **Duplication (with 2.7):** `_new_model_prior`, `_update_niw`, `_update_all_models` are exact copies of the Bayesian ones → one shared module (see 2.7).
+- [x] (closed 2026-11-17, kept: thesis eq. 5.5; a modelling question → TOOLING_TODO "After the paper") Merging floors ν at n+2, but newborn possibilistic models start at ν=1 → merging two young models jumps ν up.
+- [x] (closed 2026-11-17, kept and documented: it is the average distance between neighbouring models of the final pool; tested) Merge diagnostic `hellinger_avg` is the average from the *last* merge pass only (reset each pass).
+- [x] (closed 2026-11-17, kept and documented: maximal distance = that pair is never merged; no NaN row can come from it) Hellinger returns 1.0 (max distance) on numerical failure, silently.
+- [x] (done 2026-11-17) `_prune_models` docstring mentions a threshold the function no longer has.
+- [x] (done 2026-11-17) `except Exception: pass` around aggregation → report with counts (Part 2 NaN rule); `burn_obs = min(burn_in, T // 2)` (TODO item).
 - [x] (done in Part 1, 2026-11-16) L830 `test_run_core` (needs real data, not a pytest test) → renamed `demo_run_core`.
 
 ### 2.10 `pipeline_wrapper.py` — [x] tests drafted 2026-11-13
@@ -276,7 +296,7 @@ Numbers are covered by `tests/test_snapshots.py`.
 
 Edge-case notes:
 - [x] (done in Part 1, 2026-11-16) `sys.path.insert` at import time (goes away with the package move).
-- [?] Real-data loop catches every loading exception and prints a warning → a typo in a path just skips that dataset.
+- [x] (done 2026-11-17: a missing path raises `FileNotFoundError` before anything runs; only a file that isn't a French table file (`ValueError`) is skipped with a warning) Real-data loop catches every loading exception and prints a warning → a typo in a path just skips that dataset.
 
 ### 2.11 `evaluation_pipeline.py` — [x] done 2026-11-16 (tests drafted 2026-11-13)
 Tests (`tests/test_evaluation_pipeline.py`, 8 passing; fake run folder): strategy discovery (incl. `*_longonly`), loading weights ± predictives, missing files raise, scalar metrics == the metric functions (Sharpe daily, CE, log-lik), NaN when RF / predictives missing, `run_evaluation` writes `scalars.csv` (5 columns), `rolling_sharpe.csv`, and `log_likelihood.csv` / `mahalanobis.csv` for predictive strategies only, one broken strategy doesn't stop the rest, empty folder raises.
@@ -308,4 +328,18 @@ Edge-case notes:
 - [~] (deferred 2026-11-16, same) Plot `STRATEGIES` only covers Bayesian + 3 possibilistic, though `GROUP_COLOURS` lists benchmark / frequentist / shrinkage groups too.
 
 ## Part 3 — After tests + move
-Back to `TOOLING_TODO.md` Primary list (device fix, P3, P2/P1, rf.csv, window fixes).
+Back to `TOOLING_TODO.md` Primary list (device fix, P3, P2/P1, rf.csv, window fixes). — all done (2026-11-17).
+
+### Structure after 2026-11-17 (what moved where)
+- `niw.py` (new): everything the two averaging methods share.
+- `possibilistic_bayesian.run_core(..., necessity=False)` returns `(diag_df, {"plain": StrategyOutput})`; with `necessity=True` also `"masked"`, `"power"`, `"exp"`. `_scheme_weights` is the one place a weighting scheme is defined. `_merge_models(..., distance_fn=...)` replaces the `_core` / `_hellinger` / `_mahalanobis` trio.
+- `predictive.warn_nan_rows`: the one warning for rows an algorithm had to leave NaN (Markowitz, min-variance, Jorion, Kan-Zhou, possibilistic).
+- `pipeline_wrapper`: `record_run_config`, overwrite protection, command line (`--simulated`, `--out`, `--algorithms`, `--necessity`).
+
+### Full rerun (finish-line item 5)
+```bash
+uv run python -m possibilistic_portfolio.pipeline_wrapper --out results_baseline
+uv run python -m possibilistic_portfolio.pipeline_wrapper --simulated --out results_baseline
+uv run python -m possibilistic_portfolio.evaluation_pipeline results_baseline
+```
+Run on 2026-11-17 into `results_baseline/` (code: `411052a` + the uncommitted `refactor-finish` changes, as its `config.json` records): 20 Kenneth French + 6 simulated datasets, all three steps exit 0, about 1 hour, no warnings (no row left NaN by any algorithm), every dataset has `scalars.csv` for 17 strategies (16 on simulated data: no market). This is the baseline the extension starts from. The notebooks still point at the FYP results and know the old strategy names (`possibilistic_masked` …); the new runs have `possibilistic_plain`.

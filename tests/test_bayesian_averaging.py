@@ -13,8 +13,6 @@ from scipy.stats import multivariate_t
 
 from possibilistic_portfolio import bayesian_averaging as ba
 from possibilistic_portfolio import config, niw
-from possibilistic_portfolio.markowitz import markowitz_step
-from possibilistic_portfolio.predictive import StrategyOutput
 
 N = 3
 
@@ -182,17 +180,13 @@ def test_prune_caps_models_but_keeps_newest():
     assert [m[0] for m in out[0]] == [0, 1, 4]  # two most probable + newest
 
 
-def _fw(out: StrategyOutput) -> tuple[dict, pd.DataFrame]:
-    """(forecast, weights) of a predictive strategy."""
-    assert out.forecast is not None
-    return out.forecast, out.weights
-
-
 # --- run_core -------------------------------------------------------------
 
 
 def test_run_core_shapes_and_nan_layout(returns):
-    pred, w = _fw(ba.run_core(returns, burn_in=40, start=60))
+    """A forecast from burn_in on (rows burn_in … start-1 are warm-up); the
+    weights come from the pipeline (weight_rules)."""
+    pred = ba.run_core(returns, burn_in=40, start=60)
     T = len(returns)
     assert pred["mu_hat"].shape == (T, N) and pred["sigma_hat"].shape == (
         T,
@@ -203,16 +197,10 @@ def test_run_core_shapes_and_nan_layout(returns):
         np.isnan(pred["mu_hat"][:40]).all()
         and np.isfinite(pred["mu_hat"][40:]).all()
     )
-    assert w.iloc[:60].isna().all().all() and w.iloc[60:-1].notna().all().all()
-    assert w.iloc[-1].isna().all()
-    t = 100
-    assert np.allclose(
-        w.iloc[t], markowitz_step(pred["mu_hat"][t], pred["sigma_hat"][t])
-    )
 
 
 def test_run_core_covariances_are_symmetric_positive_definite(returns):
-    pred, _ = _fw(ba.run_core(returns, start=40, burn_in=40))
+    pred = ba.run_core(returns, start=40, burn_in=40)
     for S in pred["sigma_hat"][40:]:
         assert np.allclose(S, S.T)
         assert np.linalg.eigvalsh(S).min() > 0
@@ -221,10 +209,10 @@ def test_run_core_covariances_are_symmetric_positive_definite(returns):
 def test_run_core_uses_returns_up_to_t_only(returns):
     """Changing returns after t must not change the prediction at t."""
     t = 100
-    pred, _ = _fw(ba.run_core(returns, start=40, burn_in=40))
+    pred = ba.run_core(returns, start=40, burn_in=40)
     changed = returns.copy()
     changed.iloc[t + 1 :] = 0.5
-    pred2, _ = _fw(ba.run_core(changed, start=40, burn_in=40))
+    pred2 = ba.run_core(changed, start=40, burn_in=40)
     assert np.allclose(
         pred["mu_hat"][: t + 1], pred2["mu_hat"][: t + 1], equal_nan=True
     )
@@ -254,10 +242,3 @@ def test_burn_in_longer_than_the_data_raises(returns):
     """Was silently shortened to half the data."""
     with pytest.raises(ValueError, match="burn_in"):
         ba.run_core(returns, start=500, burn_in=500)
-
-
-def test_theta_reaches_the_weights(returns):
-    """theta was ignored before (always 1): unconstrained weights scale 1/theta."""
-    w1 = ba.run_core(returns, start=60, burn_in=40, theta=1.0).weights
-    w2 = ba.run_core(returns, start=60, burn_in=40, theta=2.0).weights
-    np.testing.assert_allclose(w2.to_numpy(), w1.to_numpy() / 2.0)

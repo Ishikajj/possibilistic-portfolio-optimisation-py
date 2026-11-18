@@ -9,7 +9,8 @@ Rows without a forecast (before it starts) are NaN.
 Timing convention (the whole pipeline):
     Everything is stored at row t = the day it is DECIDED, not the day it is for.
     - forecast row t  uses returns up to and including t, predicts t+1
-    - weights row t   come from forecast row t (same row), are held over t+1
+    - weights row t   come from forecast row t (same row; weight_rules), are
+                      held over t+1
     - evaluation      pairs row t with the returns at t+1. This +1 shift lives
                       in exactly two places: portfolio_returns
                       (weights.shift(1)) and _gaussian_terms (returns[1:] vs
@@ -19,11 +20,10 @@ Timing convention (the whole pipeline):
 check_aligned only checks that forecast and returns are the same rows (same
 labels, same order); the timing above is a convention, enforced by those tests.
 
-StrategyOutput   — what every algorithm returns: weights + forecast (None for
-                   weight-only strategies).
 warn_nan_rows    — the one warning an algorithm gives for rows it had to leave
                    NaN after it started (counts per reason).
-make_predictive  — build the dict; every algorithm uses it, so "index" is always set.
+make_predictive  — build the dict; every forecaster returns one, so "index" is
+                   always set.
 check_aligned    — raise unless the forecast's index equals the returns' index.
 save_predictive  — write <algo>_predictive.npz (mu_hat, sigma_hat, index) to a run folder.
 load_predictive  — read it back; falls back to the old <algo>_mus.npy / _sigmas.npy
@@ -31,20 +31,10 @@ load_predictive  — read it back; falls back to the old <algo>_mus.npy / _sigma
 """
 
 import warnings
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
-
-@dataclass
-class StrategyOutput:
-    """One strategy's result: weights indexed like the returns and, for
-    predictive strategies, the forecast dict (``make_predictive``)."""
-
-    weights: pd.DataFrame
-    forecast: dict | None = None
 
 
 def warn_nan_rows(

@@ -317,19 +317,37 @@ def test_existing_dataset_folder_is_never_overwritten(tmp_path):
 # --- per-dataset run: which files are written -----------------------------
 
 
-def test_save_algo_outputs(tmp_path):
-    dates = pd.bdate_range("2000-01-03", periods=2, name="Date")
-    w = pd.DataFrame({"a": [0.5, np.nan]}, index=dates)
-    ms = make_predictive(np.zeros((2, 1)), np.ones((2, 1, 1)), dates)
-    pw._save_algo_outputs(tmp_path, "algo", weights=w, mu_sigma_dict=ms)
+def test_save_run_applies_every_portfolio_rule(tmp_path):
+    """A forecast is saved with its index, plus the weights of every rule in
+    PORTFOLIO_RULES with the run's theta; a weight-only rule's weights are
+    saved as they are."""
+    dates = pd.bdate_range("2000-01-03", periods=4, name="Date")
+    returns = pd.DataFrame(
+        {"a": [0.01, 0.02, -0.01, 0.0], "b": [0.0, 0.01, 0.02, -0.01]},
+        index=dates,
+    )
+    forecast = make_predictive(
+        np.full((4, 2), 0.01), np.tile(0.01 * np.eye(2), (4, 1, 1)), dates
+    )
+    run = pw.AlgorithmRun(
+        forecasts={"fc": forecast},
+        weights={"rule": pd.DataFrame(0.5, index=dates, columns=["a", "b"])},
+    )
+    settings = pw.RunSettings(burn_in=0, periods_until_investment=1, theta=2.0)
+    pw._save_run(tmp_path, run, returns, settings)
+
     assert sorted(p.name for p in tmp_path.iterdir()) == [
-        "algo_predictive.npz",
-        "algo_weights.csv",
+        "fc_longonly_weights.csv",
+        "fc_predictive.npz",
+        "fc_weights.csv",
+        "rule_weights.csv",
     ]
-    back = load_predictive(tmp_path, "algo")
-    assert back is not None
-    assert np.array_equal(back["sigma_hat"], ms["sigma_hat"])
-    assert back["index"].equals(dates)  # forecast keeps its dates
+    back = load_predictive(tmp_path, "fc")
+    assert back is not None and back["index"].equals(dates)
+    unconstrained = pd.read_csv(tmp_path / "fc_weights.csv", index_col=0)
+    # (1/theta) Sigma^{-1} mu = (1/2) * 1 per asset, from start to T-2
+    assert np.allclose(unconstrained.iloc[1:3], 0.5)
+    assert unconstrained.iloc[[0, 3]].isna().all().all()
 
 
 # Small settings so the per-dataset run takes a second

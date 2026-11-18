@@ -16,10 +16,12 @@ call_all_simulated_datasets(sim_data_dir, sim_files, ...)
     simulated_datasets.generate_and_save_sim_datasets).
 
 Run settings travel as one ``RunSettings`` object (defaults from config.py).
-``ALGORITHMS`` lists each algorithm with the settings it takes; every
-algorithm returns ``predictive.StrategyOutput`` (weights + optional forecast),
-possibilistic one per weighting scheme. The pipeline saves them all the same
-way.
+Two kinds of algorithm, each in its own table with the settings it takes:
+``WEIGHT_RULES`` (1/N, market, minimum variance) give weights directly;
+``FORECASTERS`` give a forecast (predictive moments; possibilistic one per
+weighting scheme), and the pipeline turns every forecast into weights with
+each rule in ``PORTFOLIO_RULES`` (Markowitz unconstrained and long-only,
+weight_rules). ``ALGORITHMS`` is both tables, in run order.
 
 Run folders: ``output_dir`` is one run. It gets a ``config.json`` with the
 settings used, and one sub-folder per dataset. Past results are never
@@ -53,7 +55,7 @@ import json
 import logging
 import subprocess
 import time
-from collections.abc import Callable, Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -64,13 +66,10 @@ import pandas as pd
 
 from possibilistic_portfolio import bayesian_averaging, possibilistic_bayesian
 from possibilistic_portfolio.alternative_investment_rules import (
-    equal_weight_strategy,
-    historical_expectations_weights,
-    jorion_bayes_stein_strategy,
-    kan_zhou_three_fund_strategy,
-    market_weight_strategy,
-    minimum_variance_strategy,
-    rolling_window_weights,
+    historical_expanding_forecast,
+    jorion_bayes_stein_forecast,
+    kan_zhou_three_fund_forecast,
+    rolling_window_forecast,
 )
 from possibilistic_portfolio.config import (
     BAYESIAN_MAX_MODELS,
@@ -105,9 +104,15 @@ from possibilistic_portfolio.data_input import (
     load_excess_returns,
     prepare_returns,
 )
-from possibilistic_portfolio.markowitz import markowitz_long_only
-from possibilistic_portfolio.predictive import StrategyOutput, save_predictive
+from possibilistic_portfolio.predictive import save_predictive
 from possibilistic_portfolio.simulated_datasets import DGPS, sim_paths
+from possibilistic_portfolio.weight_rules import (
+    equal_weights,
+    market_weights,
+    markowitz_long_only,
+    markowitz_unconstrained,
+    minimum_variance_weights,
+)
 
 # by name, not __name__: run with `python -m`, __name__ is "__main__"
 log = logging.getLogger("possibilistic_portfolio.pipeline_wrapper")
@@ -149,12 +154,13 @@ class RunSettings:
 
 @dataclass
 class AlgorithmRun:
-    """What one algorithm produces: its strategies (file prefix → output,
-    saved as ``<prefix>_weights.csv`` / ``_predictive.npz`` /
-    ``_longonly_weights.csv``) and extra tables (file stem → table, saved as
-    ``<stem>.csv``)."""
+    """What one algorithm produces, by file prefix: forecasts (saved as
+    ``<prefix>_predictive.npz``, plus ``<prefix>_<suffix>.csv`` for every
+    rule in PORTFOLIO_RULES), weights of a weight-only rule (saved as
+    ``<prefix>_weights.csv``), and extra tables (saved as ``<stem>.csv``)."""
 
-    strategies: dict[str, StrategyOutput]
+    forecasts: dict[str, dict] = field(default_factory=dict)
+    weights: dict[str, pd.DataFrame] = field(default_factory=dict)
     tables: dict[str, pd.DataFrame] = field(default_factory=dict)
 
 
@@ -173,44 +179,48 @@ class AlgorithmsFailed(RuntimeError):
 
 # ── The algorithms ────────────────────────────────────────────────────────────
 
-# Algorithm name -> (function, the settings it takes besides `start`), in run
-# order. Every function is (returns_df, *, start, ...) -> StrategyOutput,
-# except possibilistic (see _run_algorithm). Select with ``algorithms=[...]``;
-# to add an algorithm, add an entry.
-ALGORITHMS: dict[
+# Name -> (function, the settings it takes besides `start`), in run order.
+# Every function is (returns_df, *, start, ...). Select with
+# ``algorithms=[...]``; to add an algorithm, add an entry.
+
+# Weight-only rules: give weights directly (DataFrame like the returns).
+WEIGHT_RULES: dict[
     str, tuple[Callable[..., Any], Callable[[RunSettings], dict]]
 ] = {
-    "equal_weight": (equal_weight_strategy, lambda s: {}),
-    "market_weight": (market_weight_strategy, lambda s: {}),
+    "equal_weight": (equal_weights, lambda s: {}),
+    "market_weight": (market_weights, lambda s: {}),
     "minimum_variance": (
-        minimum_variance_strategy,
+        minimum_variance_weights,
         lambda s: {"window": s.rolling_window_long},
     ),
-    "historical_expanding": (
-        historical_expectations_weights,
-        lambda s: {"theta": s.theta},
-    ),
+}
+
+# Forecasters: give a forecast dict (possibilistic: (diagnostics,
+# {scheme: forecast}), see _run_algorithm); weights come from PORTFOLIO_RULES.
+FORECASTERS: dict[
+    str, tuple[Callable[..., Any], Callable[[RunSettings], dict]]
+] = {
+    "historical_expanding": (historical_expanding_forecast, lambda s: {}),
     "rolling_window_long": (
-        rolling_window_weights,
-        lambda s: {"window": s.rolling_window_long, "theta": s.theta},
+        rolling_window_forecast,
+        lambda s: {"window": s.rolling_window_long},
     ),
     "rolling_window_short": (
-        rolling_window_weights,
-        lambda s: {"window": s.rolling_window_short, "theta": s.theta},
+        rolling_window_forecast,
+        lambda s: {"window": s.rolling_window_short},
     ),
     "jorion_bayes_stein": (
-        jorion_bayes_stein_strategy,
-        lambda s: {"window": s.rolling_window_long, "theta": s.theta},
+        jorion_bayes_stein_forecast,
+        lambda s: {"window": s.rolling_window_long},
     ),
     "kan_zhou_three_fund": (
-        kan_zhou_three_fund_strategy,
-        lambda s: {"window": s.rolling_window_long, "theta": s.theta},
+        kan_zhou_three_fund_forecast,
+        lambda s: {"window": s.rolling_window_long},
     ),
     "bayesian_averaging": (
         bayesian_averaging.run_core,
         lambda s: {
             "burn_in": s.burn_in,
-            "theta": s.theta,
             "max_models": s.bayesian_max_models,
             "prune_threshold": s.bayesian_prune_threshold,
             "keep_newest": s.keep_newest,
@@ -220,7 +230,6 @@ ALGORITHMS: dict[
         possibilistic_bayesian.run_core,
         lambda s: {
             "burn_in": s.burn_in,
-            "theta": s.theta,
             "max_models": s.possibilistic_max_models,
             "keep_newest": s.keep_newest,
             "merge_threshold": s.merge_threshold,
@@ -235,6 +244,16 @@ ALGORITHMS: dict[
     ),
 }
 
+# Every algorithm, in run order (weight-only rules first).
+ALGORITHMS = {**WEIGHT_RULES, **FORECASTERS}
+
+# Applied to every forecast: file suffix -> rule (forecast, returns_df, *,
+# start, theta) -> weights. theta (risk aversion) is only used here.
+PORTFOLIO_RULES: dict[str, Callable[..., pd.DataFrame]] = {
+    "weights": markowitz_unconstrained,
+    "longonly_weights": markowitz_long_only,
+}
+
 
 def _run_algorithm(
     name: str, returns_df: pd.DataFrame, settings: RunSettings
@@ -244,15 +263,17 @@ def _run_algorithm(
         return AlgorithmRun({})  # e.g. simulated data: no market column
     fn, settings_for = ALGORITHMS[name]
     result = fn(returns_df, start=settings.start, **settings_for(settings))
+    if name in WEIGHT_RULES:
+        return AlgorithmRun(weights={name: result})
     if name == "possibilistic":
-        # (diagnostics, {scheme: output}): one strategy per weighting scheme
+        # (diagnostics, {scheme: forecast}): one strategy per weighting scheme
         # ("plain"; with settings.necessity also masked / power / exp)
-        diag_df, outputs = result
+        diag_df, forecasts = result
         return AlgorithmRun(
-            {f"possibilistic_{scheme}": o for scheme, o in outputs.items()},
+            forecasts={f"possibilistic_{s}": f for s, f in forecasts.items()},
             tables={"possibilistic_diagnostics": diag_df},
         )
-    return AlgorithmRun({name: result})
+    return AlgorithmRun(forecasts={name: result})
 
 
 def _select_algorithms(algorithms: Sequence[str] | None) -> list[str]:
@@ -269,25 +290,6 @@ def _select_algorithms(algorithms: Sequence[str] | None) -> list[str]:
 
 
 # ── Saving ────────────────────────────────────────────────────────────────────
-
-
-def _save_algo_outputs(
-    folder: Path,
-    algo_name: str,
-    weights: pd.DataFrame | None = None,
-    mu_sigma_dict: dict | None = None,
-) -> None:
-    """Persist weights (CSV, indexed like the returns) and, where available,
-    the forecast with its index (<algo_name>_predictive.npz, see predictive.py).
-
-    File naming convention:
-      <algo_name>_weights.csv
-      <algo_name>_predictive.npz
-    """
-    if weights is not None:
-        weights.to_csv(folder / f"{algo_name}_weights.csv")
-    if mu_sigma_dict is not None:
-        save_predictive(folder, algo_name, mu_sigma_dict)
 
 
 def _code_version() -> str | None:
@@ -405,7 +407,7 @@ def _write_json(path: Path, content: dict) -> None:
 
 
 @contextmanager
-def _run_log(output_dir: Path) -> Iterator[None]:
+def _run_log(output_dir: Path) -> Generator[None]:
     """Log the package (every ``possibilistic_portfolio`` module) and all
     warnings, with timestamps, to the terminal and to
     ``<output_dir>/run.log`` (appended) while the block runs."""
@@ -567,18 +569,19 @@ def _save_run(
     returns_df: pd.DataFrame,
     settings: RunSettings,
 ) -> None:
-    """Save one algorithm's strategies (weights, forecast, long-only
-    weights) and tables into the dataset folder."""
-    for strategy, out in run.strategies.items():
-        _save_algo_outputs(folder, strategy, out.weights, out.forecast)
-        if out.forecast is not None:
-            long_only = markowitz_long_only(
-                mu_sigma_dict=out.forecast,
-                returns_df=returns_df,
-                start=settings.start,
-                theta=settings.theta,
+    """Save one algorithm's outputs into the dataset folder: weights of a
+    weight-only rule; each forecast (``<prefix>_predictive.npz``) and the
+    weights of every rule in PORTFOLIO_RULES applied to it; tables. CSVs are
+    indexed like the returns."""
+    for prefix, weights in run.weights.items():
+        weights.to_csv(folder / f"{prefix}_weights.csv")
+    for prefix, forecast in run.forecasts.items():
+        save_predictive(folder, prefix, forecast)
+        for suffix, rule in PORTFOLIO_RULES.items():
+            weights = rule(
+                forecast, returns_df, start=settings.start, theta=settings.theta
             )
-            long_only.to_csv(folder / f"{strategy}_longonly_weights.csv")
+            weights.to_csv(folder / f"{prefix}_{suffix}.csv")
     for stem, table in run.tables.items():
         table.to_csv(folder / f"{stem}.csv")
 

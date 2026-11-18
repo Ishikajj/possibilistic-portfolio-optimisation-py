@@ -17,8 +17,8 @@ Algorithm (per time step)
              probability-weighted average across models.
 
 Steps 1–6 repeat for every observation, producing a time-indexed series of
-predictive moments (mu_hat, sigma_hat) which are passed to the Markowitz
-solver to generate portfolio weights.
+predictive moments (mu_hat, sigma_hat); the pipeline turns them into
+Markowitz weights (weight_rules).
 
 Design constraint
 -----------------
@@ -28,11 +28,10 @@ covariance matrix is common across assets.
 
 Entry point
 -----------
-run_core(returns_df, *, start, burn_in, theta, ...)
+run_core(returns_df, *, start, burn_in, ...)
     Input : returns_df — pd.DataFrame of shape (T, n), numeric excess returns.
-    Output: StrategyOutput(weights, forecast)  (predictive.py)
-        forecast — {"mu_hat": ndarray (T, n), "sigma_hat": ndarray (T, n, n), "index"}
-        weights  — pd.DataFrame (T, n), Markowitz weights aligned to returns_df.index
+    Output: the forecast dict (predictive.make_predictive):
+        {"mu_hat": ndarray (T, n), "sigma_hat": ndarray (T, n, n), "index"}
 """
 
 from __future__ import annotations
@@ -52,14 +51,12 @@ from possibilistic_portfolio.config import (
     DATASETS_DIR,
     KEEP_NEWEST,
     RF_PATH,
-    THETA,
 )
 from possibilistic_portfolio.data_input import (
     load_excess_returns,
     prepare_returns,
 )
-from possibilistic_portfolio.markowitz import markowitz_unconstrained
-from possibilistic_portfolio.predictive import StrategyOutput, make_predictive
+from possibilistic_portfolio.predictive import make_predictive
 
 log = logging.getLogger(__name__)
 
@@ -303,23 +300,21 @@ def run_core(
     *,
     start: int,
     burn_in: int = BURN_IN,
-    theta: float = THETA,
     max_models: int | None = BAYESIAN_MAX_MODELS,
     prune_threshold: float = BAYESIAN_PRUNE_THRESHOLD,
     keep_newest: bool = KEEP_NEWEST,
-) -> StrategyOutput:
+) -> dict:
     """Run probabilistic Bayesian model averaging over NIW models.
 
     Input : returns_df — (T, n) numeric excess returns, no RF column.
-            start — first row with weights (always passed).
+            start — first row with weights (always passed; only checked
+                against burn_in here).
             burn_in — first rows used only to set the prior; must be
                 <= start and < T (raises otherwise).
-            theta — risk aversion of the Markowitz weights.
             Everything after returns_df is keyword-only; defaults: config.
-    Output: StrategyOutput(weights, forecast)
-        forecast — {"mu_hat": (T, n), "sigma_hat": (T, n, n), "index"}, NaN
-                   before burn_in (rows burn_in … start-1 are warm-up).
-        weights  — Markowitz weights (T, n), aligned to returns_df.index.
+    Output: the forecast {"mu_hat": (T, n), "sigma_hat": (T, n, n), "index"},
+        NaN before burn_in (rows burn_in … start-1 are warm-up). Row t uses
+        returns up to and including t: it predicts t+1.
     """
     R = returns_df.to_numpy(dtype=float)
     T, n = R.shape
@@ -375,17 +370,7 @@ def run_core(
 
         sum_R += R_t
         sum_R2 += R_t**2
-    mu_sigma_dict = make_predictive(mu_hat_arr, sigma_hat_arr, returns_df.index)
-
-    weights = markowitz_unconstrained(
-        mu_sigma_dict=mu_sigma_dict,
-        returns_df=returns_df,
-        start=start,
-        theta=theta,
-    )
-
-    # Row t of the forecast uses returns up to and including t: it predicts t+1.
-    return StrategyOutput(weights, mu_sigma_dict)
+    return make_predictive(mu_hat_arr, sigma_hat_arr, returns_df.index)
 
 
 def main() -> None:
@@ -396,8 +381,7 @@ def main() -> None:
             start_date="2020-01-01",
         )
     )
-    forecast = run_core(df, start=100, burn_in=100).forecast
-    assert forecast is not None
+    forecast = run_core(df, start=100, burn_in=100)
     print(forecast["mu_hat"])
     print(forecast["sigma_hat"])
 

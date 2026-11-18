@@ -23,6 +23,7 @@ import numpy as np
 
 from possibilistic_portfolio import config, data_input
 from possibilistic_portfolio import possibilistic_bayesian as pb
+from possibilistic_portfolio.weight_rules import markowitz_unconstrained
 
 T, N_ASSETS = 160, 3
 
@@ -37,7 +38,7 @@ def build() -> dict[str, np.ndarray]:
         )
     ).iloc[:T, :N_ASSETS]
     t0 = time.time()
-    diag, outputs = pb.run_core(
+    diag, forecasts = pb.run_core(
         returns,
         start=60,
         burn_in=40,
@@ -48,12 +49,11 @@ def build() -> dict[str, np.ndarray]:
     )
     print(f"run_core with real necessity: {time.time() - t0:.1f}s")
     out = {"returns": returns.to_numpy()}
-    for name, o in outputs.items():  # plain, masked, power, exp
-        pred, w = o.forecast, o.weights
-        assert pred is not None
+    for name, pred in forecasts.items():  # plain, masked, power, exp
         out[f"{name}_mu"] = pred["mu_hat"]
         out[f"{name}_sigma"] = pred["sigma_hat"]
-        out[f"{name}_weights"] = w.to_numpy()
+        weights = markowitz_unconstrained(pred, returns, start=60)  # as before
+        out[f"{name}_weights"] = weights.to_numpy()
     num = diag.select_dtypes("number")
     out["diag"] = num.to_numpy(dtype=float)
     out["diag_cols"] = np.array(list(num.columns))

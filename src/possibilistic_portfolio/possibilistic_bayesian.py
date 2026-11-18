@@ -4,7 +4,8 @@ Replaces the probabilistic normalisation constant (sum) with a supremum, produci
 possibility distributions instead of probability distributions. At each time step a
 new NIW model is born, all models are updated via the conjugate NIW update, and
 possibilities are reweighted using the possibilistic Bayes rule. The models are
-then pooled geometrically into one predictive (mu, Sigma), which goes to Markowitz.
+then pooled geometrically into one predictive (mu, Sigma), the forecast; the
+pipeline turns it into Markowitz weights (weight_rules).
 
 Weighting schemes (the pooling weights of the models):
   "plain"                   — the possibilities themselves (default, always there)
@@ -23,8 +24,8 @@ Algorithm (per time step t):
 7. Prune     — keep top max_models by possibility
 8. Merge     — merge similar models by Hellinger distance to reduce redundancy
 
-Entry point: run_core(returns_df, ...) — returns (diag_df, outputs), outputs =
-{scheme: StrategyOutput(weights, forecast)}, one per weighting scheme.
+Entry point: run_core(returns_df, ...) — returns (diag_df, forecasts),
+forecasts = {scheme: forecast dict}, one per weighting scheme.
 """
 
 from __future__ import annotations
@@ -50,7 +51,6 @@ from possibilistic_portfolio.config import (
     NU_BANDWIDTH,
     POSSIBILISTIC_MAX_MODELS,
     RF_PATH,
-    THETA,
     USE_NECESSITY,
 )
 from possibilistic_portfolio.data_input import (
@@ -63,12 +63,7 @@ from possibilistic_portfolio.faster_necessity import (
     necessity_scores_fast,
     power_weighting,
 )
-from possibilistic_portfolio.markowitz import markowitz_unconstrained
-from possibilistic_portfolio.predictive import (
-    StrategyOutput,
-    make_predictive,
-    warn_nan_rows,
-)
+from possibilistic_portfolio.predictive import make_predictive, warn_nan_rows
 
 # Weighting schemes that need necessity scores (run_core(necessity=True)).
 NECESSITY_SCHEMES = ("masked", "power", "exp")
@@ -605,7 +600,6 @@ def run_core(
     *,
     start: int,
     burn_in: int = BURN_IN,
-    theta: float = THETA,
     max_models: int = POSSIBILISTIC_MAX_MODELS,
     keep_newest: bool = KEEP_NEWEST,
     merge_threshold: float = MERGE_THRESHOLD,
@@ -616,7 +610,7 @@ def run_core(
     eta: float = NECESSITY_ETA,
     device: str = NECESSITY_DEVICE,
     n_jobs: int = NECESSITY_N_JOBS,
-) -> tuple[pd.DataFrame, dict[str, StrategyOutput]]:
+) -> tuple[pd.DataFrame, dict[str, dict]]:
     """Run the possibilistic NIW model averaging algorithm.
 
     Args:
@@ -626,7 +620,6 @@ def run_core(
             burn_in: rows burn_in … start-1 are warm-up (learning, no weights).
         burn_in: periods used to initialise sum_R / sum_R2 before model birth
             begins; must be <= start and < T (raises otherwise).
-        theta: risk aversion of the Markowitz weights.
         merge_threshold: Hellinger distance below which two models are merged.
         max_models: maximum pool size after pruning each step.
         keep_newest: if True, always retain the newborn model after pruning.
@@ -639,14 +632,13 @@ def run_core(
         device: "cpu" or "cuda" for necessity score computation.
         n_jobs: parallel workers for necessity score computation.
 
-    Returns (diag_df, outputs):
-        diag_df  — per-step diagnostics from burn_in on, indexed like the
-                   returns (model counts, nu, Hellinger average; with
-                   necessity also its statistics)
-        outputs  — weighting scheme -> StrategyOutput(weights, forecast):
-                   "plain", plus NECESSITY_SCHEMES with necessity.
-                   forecast = {"mu_hat": (T,n), "sigma_hat": (T,n,n), "index"};
-                   weights = (T, n) Markowitz weights from that forecast.
+    Returns (diag_df, forecasts):
+        diag_df    — per-step diagnostics from burn_in on, indexed like the
+                     returns (model counts, nu, Hellinger average; with
+                     necessity also its statistics)
+        forecasts  — weighting scheme -> forecast {"mu_hat": (T,n),
+                     "sigma_hat": (T,n,n), "index"}: "plain", plus
+                     NECESSITY_SCHEMES with necessity.
 
     A step whose aggregation fails leaves that forecast row NaN; one
     RuntimeWarning at the end gives the counts.
@@ -749,17 +741,14 @@ def run_core(
         records, index=index[burn_in:].rename(index.name or "t")
     )
 
-    outputs = {}
-    for scheme in schemes:
-        forecast = make_predictive(mu_hat[scheme], sigma_hat[scheme], index)
-        weights_df = markowitz_unconstrained(
-            forecast, returns_df, start=start, theta=theta
-        )
-        outputs[scheme] = StrategyOutput(weights_df, forecast)
-    return diag_df, outputs
+    forecasts = {
+        scheme: make_predictive(mu_hat[scheme], sigma_hat[scheme], index)
+        for scheme in schemes
+    }
+    return diag_df, forecasts
 
 
-def demo_run_core() -> tuple[pd.DataFrame, dict[str, StrategyOutput]]:
+def demo_run_core() -> tuple[pd.DataFrame, dict[str, dict]]:
     """Run a minimal smoke test of run_core on a short return sample."""
     df = prepare_returns(
         load_excess_returns(
@@ -770,7 +759,7 @@ def demo_run_core() -> tuple[pd.DataFrame, dict[str, StrategyOutput]]:
     )
     df_small = df.iloc[:150].copy()
 
-    diag_df, outputs = run_core(
+    diag_df, forecasts = run_core(
         df_small,
         start=20,
         burn_in=20,
@@ -790,7 +779,7 @@ def demo_run_core() -> tuple[pd.DataFrame, dict[str, StrategyOutput]]:
 
     print("demo_run_core passed")
     print(diag_df.tail())
-    return diag_df, outputs
+    return diag_df, forecasts
 
 
 if __name__ == "__main__":

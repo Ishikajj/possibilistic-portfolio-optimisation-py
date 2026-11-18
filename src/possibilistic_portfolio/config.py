@@ -49,7 +49,7 @@ SIM_SEED = 42
 
 # ── Algorithm defaults ─────────────────────────────────────────────────────
 # One place for the defaults of every algorithm (alternative_investment_rules,
-# markowitz, bayesian_averaging, possibilistic_bayesian) and pipeline_wrapper.
+# weight_rules, bayesian_averaging, possibilistic_bayesian) and pipeline_wrapper.
 # Values = the FYP runs (pipeline_wrapper.main). Algorithms take
 # (returns_df, *, start, ...): everything after returns_df is keyword-only,
 # `start` (first row with weights) is always passed explicitly.

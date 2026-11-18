@@ -1,4 +1,6 @@
-"""Tests for markowitz.py — unconstrained (closed form) and long-only (SLSQP) weights."""
+"""Tests for weight_rules.py — Markowitz unconstrained (closed form) and
+long-only (SLSQP) weights from a forecast, and the weight-only rules (1/N,
+market, minimum variance)."""
 
 import warnings
 
@@ -6,8 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from possibilistic_portfolio import markowitz
-from possibilistic_portfolio.markowitz import (
+from possibilistic_portfolio import weight_rules
+from possibilistic_portfolio.weight_rules import (
     markowitz_long_only,
     markowitz_step,
     markowitz_step_long_only,
@@ -193,7 +195,7 @@ def test_long_only_failure_is_nan_and_keeps_warm_start(monkeypatch):
     # Make the 2nd optimisation fail; the 3rd must start from the 1st's answer.
     T, n = 8, 3
     pred = _predictives(T, n)
-    real_step = markowitz.markowitz_step_long_only
+    real_step = weight_rules.markowitz_step_long_only
     starts, results = [], []
 
     def flaky_step(mu_t, sigma_t, theta, w0):
@@ -204,7 +206,7 @@ def test_long_only_failure_is_nan_and_keeps_warm_start(monkeypatch):
         results.append(w)
         return w
 
-    monkeypatch.setattr(markowitz, "markowitz_step_long_only", flaky_step)
+    monkeypatch.setattr(weight_rules, "markowitz_step_long_only", flaky_step)
     with pytest.warns(RuntimeWarning, match="optimiser failed: 1"):
         w = markowitz_long_only(pred, pd.DataFrame(np.zeros((T, n))), 2)
 
@@ -220,3 +222,81 @@ def test_clean_run_gives_no_warning():
         warnings.simplefilter("error")  # any warning fails the test
         markowitz_unconstrained(_predictives(T, n), df, 2)
         markowitz_long_only(_predictives(T, n), df, 2)
+
+
+# --- weight-only rules (no forecast) ---------------------------------------
+
+T_B, N_B, FIRST = 120, 3, 50  # benchmark data: rows, assets, start
+
+
+@pytest.fixture
+def bench_returns() -> pd.DataFrame:
+    rng = np.random.default_rng(0)
+    cov = 1e-4 * (0.3 * np.ones((N_B, N_B)) + 0.7 * np.eye(N_B))
+    data = rng.multivariate_normal([0.001, 0.0005, 0.0002], cov, size=T_B)
+    return pd.DataFrame(data, columns=["a", "b", "Mkt-RF"])
+
+
+def _assert_nan_layout(weights: pd.DataFrame, first: int) -> None:
+    assert weights.iloc[:first].isna().all().all()
+    assert weights.iloc[first:-1].notna().all().all()
+    assert weights.iloc[-1].isna().all()
+
+
+def test_solve_or_pinv_falls_back_on_singular():
+    A = np.ones((2, 2))
+    b = np.array([2.0, 2.0])
+    assert np.allclose(weight_rules.solve_or_pinv(A, b), np.linalg.pinv(A) @ b)
+
+
+def test_equal_weights(bench_returns):
+    w = weight_rules.equal_weights(bench_returns, start=FIRST)
+    _assert_nan_layout(w, FIRST)
+    assert np.allclose(w.iloc[FIRST:-1], 1.0 / N_B)
+
+
+def test_market_weights(bench_returns):
+    w = weight_rules.market_weights(bench_returns, start=FIRST)
+    _assert_nan_layout(w, FIRST)
+    assert (w["Mkt-RF"].iloc[FIRST:-1] == 1.0).all()
+    assert (w[["a", "b"]].iloc[FIRST:-1] == 0.0).all().all()
+
+
+def test_market_weights_need_market_column(bench_returns):
+    with pytest.raises(KeyError):
+        weight_rules.market_weights(
+            bench_returns.drop(columns="Mkt-RF"), start=FIRST
+        )
+
+
+def test_minimum_variance_weights(bench_returns):
+    win = 30
+    w = weight_rules.minimum_variance_weights(
+        bench_returns, start=FIRST, window=win
+    )
+    _assert_nan_layout(w, FIRST)
+    assert np.allclose(w.iloc[FIRST:-1].sum(axis=1), 1.0)
+    t = 70
+    S = bench_returns.iloc[t - win + 1 : t + 1].cov().to_numpy()
+    expected = np.linalg.solve(S, np.ones(N_B))
+    assert np.allclose(w.iloc[t], expected / expected.sum())
+
+
+def test_minimum_variance_starts_at_the_first_full_window(bench_returns):
+    """Window longer than start: first weights at row window - 1 (the first
+    full window; was row window)."""
+    w = weight_rules.minimum_variance_weights(
+        bench_returns, start=FIRST, window=80
+    )
+    _assert_nan_layout(w, 79)
+
+
+def test_minimum_variance_reports_rows_it_cannot_compute(bench_returns):
+    """Was np.linalg.inv: a singular window stopped the whole run. Rows
+    60 … 99 set to zero: the windows ending at 89 … 99 are all zero."""
+    dead = bench_returns.copy()
+    dead.iloc[60:100] = 0.0
+    with pytest.warns(RuntimeWarning, match="minimum_variance: 11 of 69 rows"):
+        w = weight_rules.minimum_variance_weights(dead, start=FIRST, window=30)
+    assert w.iloc[89:100].isna().all().all()
+    assert w.iloc[FIRST:89].notna().all().all()

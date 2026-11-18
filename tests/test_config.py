@@ -9,25 +9,28 @@ from possibilistic_portfolio import alternative_investment_rules as air
 from possibilistic_portfolio import bayesian_averaging as ba
 from possibilistic_portfolio import config
 from possibilistic_portfolio import possibilistic_bayesian as pb
+from possibilistic_portfolio import weight_rules as wr
 
-ALGORITHMS = [
-    air.equal_weight_strategy,
-    air.market_weight_strategy,
-    air.minimum_variance_strategy,
-    air.historical_expectations_weights,
-    air.rolling_window_weights,
+WEIGHT_RULES = [
+    wr.equal_weights,
+    wr.market_weights,
+    wr.minimum_variance_weights,
+]
+FORECASTERS = [
+    air.historical_expanding_forecast,
+    air.rolling_window_forecast,
     air.jorion_bayes_stein_estimates,
-    air.jorion_bayes_stein_strategy,
+    air.jorion_bayes_stein_forecast,
     air.kan_zhou_three_fund_estimates,
-    air.kan_zhou_three_fund_strategy,
+    air.kan_zhou_three_fund_forecast,
     ba.run_core,
     pb.run_core,
 ]
+ALGORITHMS = WEIGHT_RULES + FORECASTERS
 
 # argument name -> config default, wherever an algorithm has that argument
 SHARED_DEFAULTS = {
     "window": config.ROLLING_WINDOW_LONG,
-    "theta": config.THETA,
     "burn_in": config.BURN_IN,
     "keep_newest": config.KEEP_NEWEST,
 }
@@ -48,6 +51,20 @@ def test_shared_defaults_come_from_config(fn):
     for name, default in SHARED_DEFAULTS.items():
         if name in params:
             assert params[name].default == default, name
+
+
+@pytest.mark.parametrize("fn", FORECASTERS, ids=lambda f: f.__qualname__)
+def test_forecasters_do_not_take_theta(fn):
+    """Risk aversion only matters for the weights: theta goes to Markowitz
+    (weight_rules) and nowhere else."""
+    assert "theta" not in inspect.signature(fn).parameters
+
+
+@pytest.mark.parametrize(
+    "fn", [wr.markowitz_unconstrained, wr.markowitz_long_only]
+)
+def test_markowitz_theta_default_comes_from_config(fn):
+    assert inspect.signature(fn).parameters["theta"].default == config.THETA
 
 
 def test_method_specific_defaults_come_from_config():

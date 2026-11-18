@@ -4,13 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from possibilistic_portfolio.markowitz import markowitz_unconstrained
 from possibilistic_portfolio.predictive import (
     check_aligned,
     load_predictive,
     make_predictive,
     save_predictive,
 )
+from possibilistic_portfolio.weight_rules import markowitz_unconstrained
 
 DATES = pd.bdate_range("2000-01-03", periods=4, name="Date")
 
