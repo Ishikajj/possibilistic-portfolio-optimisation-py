@@ -1,80 +1,67 @@
 # Dev TODO
 
-`[x]` = resolved, `[~]` = deferred, `[ ]` = open.
+The refactor (merged into `post-fyp` on 2026-11-19) is in git history: its
+plan and the done items of this file are in commit `599c77a`
+(`git show 599c77a:REFACTOR_PLAN.md`, `git show 599c77a:TOOLING_TODO.md`).
 
-## Primary — things that will bottleneck development
+## Open
 
-- [x] **P1. Pipeline is all-or-nothing** — **done 2026-11-17:** `pipeline_wrapper.ALGORITHMS` table (name → algorithm + the settings it takes; every algorithm returns `predictive.StrategyOutput`) + `algorithms=[...]` on the three pipeline functions; unknown names raise. Snapshot bit for bit. Original: — `calculate_all_functions_perdatasets` (`src/possibilistic_portfolio/pipeline_wrapper.py`, 256 lines) hard-codes all 11 algorithms in sequence, including the ~90-min possibilistic run. Can't run only Bayesian averaging, or add/swap an algorithm, without editing this function. Idea: a registry of `{name: callable}` and an `algorithms=[...]` argument.
-- [x] **P2. Parameters threaded through 3 layers** — **done 2026-11-17:** one frozen `RunSettings` dataclass (defaults from `config.py`, `.start` property) passed down as `settings=`; the `main()`s use `RunSettings()`. Bayesian pool cap is its own field `bayesian_max_models`. Original: — `main()` → `call_all_datasets` (17 params) → `calculate_all_functions_perdatasets` (15 params) → each algorithm. Adding one parameter means editing every layer. Idea: one config dataclass passed down.
-- [x] **P3. Bayesian averaging silently ignores pipeline settings** — fixed 2026-11-16 (argument redesign): theta now reaches historical, rolling, Bayesian and possibilistic (all ignored it); Bayesian `max_models` is its own explicit setting `config.BAYESIAN_MAX_MODELS`. Original: — `bayesian_averaging.run_core` takes no `theta` (always uses Markowitz default `theta=1`) and isn't passed `max_models` (uses its own default 2000; possibilistic gets 100). Fine today because `theta=1`, but changing `theta` would not affect Bayesian. Matters now that Bayesian averaging is the main method.
-- [x] **P4. Check `_new_model_prior` denominators** — Bayesian used `t-1`/`t-2`, possibilistic `t`/`t-1`. Both loops hold `t` returns (rows 0…t-1) in `sum_R` at step t, so Bayesian was off by one. **Done 2026-11-16:** Bayesian uses `t`/`t-1`; both functions now identical (tested), and a test pins the `sum_R` dataflow in both `run_core`s. Snapshot: only Bayesian changed (Sharpe 0.17788 → 0.17791 on the real slice).
-- [x] **Benchmarks use one day less info than Bayesian** — decided: all methods use returns up to and including `t` (like Bayesian). Windows `iloc[t-w:t]` → `iloc[t-w+1:t+1]` in `rolling_window_weights`, `minimum_variance_strategy`, `jorion_bayes_stein_estimates`, `kan_zhou_three_fund_estimates` (`alternative_investment_rules.py`). Changes results → fix after tests, own commit. **Done 2026-11-16:** all five windows (incl. `historical_expectations_weights`) now `iloc[t-w+1:t+1]`; `tests/test_timing.py` "uses day t" passes for every algorithm. Snapshot: only benchmark outputs changed (Bayesian, possibilistic, 1/N, market bit for bit); `reference_no_necessity.npz` regenerated, `reference.npz` (real necessity) still pre-fix.
-- [x] **"Historical expanding" is a rolling window of `burn_in + piu` days** (`alternative_investment_rules.py:83`) — decided: make it truly expanding, `iloc[:t+1]`. Changes results → fix after tests, own commit. **Done 2026-11-16:** `iloc[:t+1]`; snapshot: only historical changed.
-- [x] **Save `rf.csv` for real datasets too** — only simulated folders get one (`pipeline_wrapper.py:540`); real-data evaluation re-derives RF from its own hard-coded `START_DATE` (`evaluation_pipeline.py:392`), so changing the start date in only one place silently misaligns CEQ. Currently aligned (checked all 20 folders). **Done 2026-11-16:** `call_all_datasets` writes `rf.csv` (Date, RF); `evaluation_pipeline.load_rf` reads it by date.
-- [x] **Keep dates through the pipeline** (noted 2026-11-15) — `prepare_returns` drops `Date`, so returns, predictives, weights, `returns.csv` and the RF series are matched by row number (0..T-1) only. Row numbers shift with every slice / burn-in / date window, which makes alignment easy to get wrong (e.g. evaluation re-deriving RF from its own `START_DATE`). Idea: keep a `DatetimeIndex` from `data_input` to the saved CSVs (algorithms use `.to_numpy()`, so mostly unaffected); simulated data has no dates → integer index. Ties in with the `rf.csv` items above. Changes saved CSV indices → snapshot reference regenerated on purpose. **Done 2026-11-16:** `prepare_returns` keeps `Date` as the index; weights CSVs, `returns.csv` and forecasts (`<algo>_predictive.npz` with `index`, `predictive.py`) carry it; Markowitz, scoring and evaluation refuse misaligned inputs. Values unchanged (snapshot bit for bit). Old run folders still evaluate (by position).
-- [x] (fixed 2026-11-17 with P2: the `main()`s use `RunSettings()`, device from `config.NECESSITY_DEVICE` = cpu) Hard-coded `device="cuda"` in both `main()`s of `pipeline_wrapper.py` (see 2.6 notes) — breaks the pipeline on the Mac.
-- [x] **Sharpe-difference test** — `sharpe_difference_test` / `compare_to_benchmark` (GMM + Newey-West, 22 lags, Anderson & Cheng 2016 App. B.1) in `portfolio_evaluation_functions.py`. Done 2026-11-15 (step 2.3): Jacobian checked against App. B.1 (delta-method coefficients derived and match), tests written, identical series → t = 0 / p = 1, p-value via `norm.sf`, ~~**Bug:** `compare_to_benchmark` returns columns `0…6`~~ fixed (`_asdict()`, xfail removed). Not added to the pipeline (decided 2026-11-16, the flagship keeps changing): after the paper, run it in the notebook on the saved weights, possibilistic vs each other strategy.
-- [x] **Bug: possibilistic starts investing at row 500, not 1000** — `run_core` ignored `start`: weights began at `burn_in` instead of `start` like every other strategy. Evaluation drops each strategy's own NaN rows, so FYP possibilistic Sharpe / CEQ covered 500 extra days (confirmed in `results_fyp_submitted/iid`). **Done 2026-11-16:** weights from `start`; forecasts still from `burn_in` (warm-up). Snapshot: only possibilistic unconstrained weights + Sharpe / CEQ / turnover / rolling Sharpe changed; forecasts, log-lik, Mahalanobis, long-only (already from `start`) bit for bit.
-- [x] **Bug: evaluating a new simulated run fails** — simulated CSVs were regenerated 2026-04-27 without a `Date` column, so the pipeline now writes a Date-less `rf.csv`; `evaluation_pipeline.py` `__main__` reads it with `index_col=0` → `KeyError: 'RF'` (verified). Old run folders still have `Date` and work. Fix in step 2.11. **Fixed 2026-11-16:** `load_rf` reads a Date-less `rf.csv` by row number.
-- [x] **Bug: singular covariance crashes the run** — fixed in step 2.1 (2026-11-15): singular Σ → NaN row + one warning with counts (also counts long-only optimiser failures); θ ≤ 0 → `ValueError`; near-singular Σ left on purpose (estimator's job); NaN in Σ but not μ can't happen.
-- [x] (fixed 2026-11-17: a failed or non-finite aggregation leaves the forecast row NaN and is counted in one `RuntimeWarning` per run; `burn_in` that doesn't fit (`> start` or `>= T`) raises in `niw.burn_in_sums`, for Bayesian too. Snapshot bit for bit.) **Bug (silent failures) in `possibilistic_bayesian.run_core`** — `except Exception: pass` around aggregation leaves NaN rows with no count or warning; `burn_obs = min(burn_in, T // 2)` silently shortens the burn-in on short data. Step 2.9.
-- [x] **Bug: average turnover is diluted by the NaN rows** — `portfolio_evaluation_functions.average_turnover` does `weights.diff().abs().sum(axis=1).dropna()`, but `.sum()` turns all-NaN rows into 0, so every row before the first investment (and the last row) counts as zero turnover. FYP 10-Industry VW: Bayesian reported at 0.914× its true value, possibilistic 0.957× (factor differs per strategy because start rows differ) → `avg_turnover` in `scalars.csv` and any turnover figure (e.g. `../tablesfigures/realaverageturnover.png`) understated and not comparable across strategies. Fix in step 2.3 (`sum(axis=1, skipna=False)`); snapshot diff expected in `avg_turnover` only. **Fixed 2026-11-16** (step 2.3): `sum(axis=1, skipna=False)`; snapshot `--compare` showed only `avg_turnover` changed (old/new 0.713, possibilistic 0.784 on the 1400-row slices); `reference_no_necessity.npz` regenerated (old copy in session scratchpad); `reference.npz` (real necessity) still has the old turnover. FYP `scalars.csv` files keep the understated values.
-- [x] (fixed 2026-11-17: the forecast is now (μ\*, Σ̂/h), as in Anderson & Cheng fn. 17 and Kan & Zhou eq. 75 — plain Markowitz on it gives (h/θ)Σ̂⁻¹μ\*. Saved mean = μ\*; scoring, long-only and unconstrained weights all use the same forecast. Chosen over "apply h only to the weights" because the long-only weights then keep h too. Snapshot: only Kan-Zhou changed.) **Bug: Kan-Zhou's saved predictive mean is scaled by h** — `kan_zhou_three_fund_strategy` stores `mu_hat = h · μ*` (h ≈ 0.9 for w=252, n=11) to fold the portfolio-rule constant into Markowitz. Unconstrained weights are right, but the same scaled mean is used for log-likelihood / Mahalanobis (`*_mus.npy`) and for the long-only weights, so Kan-Zhou's predictive scores and long-only portfolio are computed on the wrong mean. Fix in step 2.5 (save μ*, apply h only to the weights); snapshot diff expected for Kan-Zhou mus / log-lik / Mahalanobis / long-only.
-- [x] (checked + fixed 2026-11-17 against Kan & Zhou's own text, eq. 66 of the 2005 working-paper version: `B((N−1)/2, (T−N+1)/2)` and exponent `−(T−2)/2`. The code had `(w+1)/2` for both, so the exponent was wrong against both papers; A&C print the beta parameter as `(w+1)/2` (a typo: only `(w−n+1)/2` gives the exponent `a+b−1 = (w−2)/2`). `tests/test_alternative_investment_rules.py` now has an independent hand-written version. Effect: v moves by a few %, Kan-Zhou results change.) **To verify: Kan-Zhou incomplete-beta parameters** — `kan_zhou_three_fund_estimates` uses `b = (w+1)/2` both as the beta's second parameter and in the `(1+ψ²)^(-b)` exponent. From memory the paper (Kan & Zhou 2007, eq. ~63) has `B((N−1)/2, (T−N+1)/2)` and exponent `−(T−2)/2`. Check against the paper before changing.
-- [x] (fixed 2026-11-17: one shared `niw.top_models` — the newborn takes the place of the lowest-ranked kept model. xfails removed. In practice it never bit: the snapshot slices did not change at all, and on the full 10 Industry VW run (11,615 days, pool at the cap of 100 almost every step) the old and the new rule give identical forecasts (max |Δμ̂| = 0) — after its update the newborn is always among the top 100, so no replacement happens. The earlier note "frequent for possibilistic at `max_models=100`" was wrong.) **Bug: pruning with `keep_newest` drops the wrong model (Bayesian + possibilistic)** — in both `_prune_models`, when the newest model isn't in the top `max_models`, the code does `keep_idx[-1] = newest`, i.e. it evicts the kept model with the highest *index* (youngest survivor), not the least probable/possible one. Example: possibilities [0.8, 0.1, 0.9, 1.0, 0.05], max 3 → keeps models 0, 2, 4 and throws away model 3, the most possible. Only bites when the pool is full and the newborn ranks outside the top `max_models` (frequent for possibilistic at `max_models=100`; Bayesian runs at 2000 so rarely full). Fix in steps 2.7 / 2.9: evict the lowest-ranked kept model; snapshot diff expected.
-- [x] (fixed 2026-11-17, kept as an option: pooled covariance is (Σ1+Σ2)/2; pass `distance_fn=_gaussian_mahalanobis_distance` to `_merge_models`. xfail removed.) **Bug (unused path): possibilistic Mahalanobis merge distance is off by √2** — `possibilistic_bayesian._gaussian_mahalanobis_distance` pools as `0.5·(Σ1+Σ1ᵀ+Σ2+Σ2ᵀ)` = Σ1+Σ2 instead of (Σ1+Σ2)/2 (docstring), so distances are √2 too small. Only used by `_merge_models_mahalanobis`. FYP results (`4e8cb38`) merge with Hellinger → unaffected. The older `results_cpu` run (`5274011`) merged with Mahalanobis with this same bug, so its effective merge threshold was √2 looser than set (superseded run, no action needed). Fix or delete the Mahalanobis option in step 2.9.
-- [x] **Bug: a file without the French markers is silently loaded as empty data** — fixed in step 2.2 (2026-11-15): `data_input` rewritten to find tables by their shape; a missing table raises a `ValueError` listing the tables found, so `call_all_datasets` warns and skips the file. xfail test now passes normally.
+- [ ] **Fresh baseline run** from a clean commit into a dated folder (e.g.
+  `--out results_2026-11-20`; ~1–1.5 h), so its `config.json` names an exact
+  commit. Replaces `results_baseline/` (2026-11-17, code `411052a + uncommitted
+  changes`, gitignored); compare the two, then delete the old one.
+- [ ] **Notebooks** (`analysis.ipynb`, `predictive_diagnostics.ipynb`): strategy
+  lists lack `possibilistic_plain`; the diagnostics cell does
+  `set_index("t")` and reads `nec_mean`, but new runs index the diagnostics by
+  Date and only have necessity columns with `--necessity`; some cells load the
+  old `*_mus.npy` / `*_sigmas.npy` (new runs: `<algo>_predictive.npz`, read with
+  `predictive.load_predictive`).
+- [ ] **`plot_weight_distributions.py`**: `RESULTS_DIR` points at a results folder
+  that may not exist; `STRATEGIES` only covers Bayesian + possibilistic, though
+  `GROUP_COLOURS` lists benchmark groups too.
+- [~] **Necessity on GPU** (`device="cuda"`): untested (PyTorch not installed);
+  GPU scoring is no longer planned.
 
-## Secondary — tooling & housekeeping
+## After the paper — research design
 
-### Done
-- [x] 2.1 uv — upgraded 0.7.13 → 0.13.7.
-- [x] 2.2 Python pinned to 3.13 (`.python-version`); independent of CUDA build.
-- [x] 2.3 Runtime deps — all used; `ipykernel` kept in runtime deps.
-- [x] 2.4 Dev deps — ruff, pandas-stubs, pytest. No CLI pyright; Pylance `diagnosticMode: workspace`.
-- [x] 2.5 Lockfile in sync.
-- [x] 2.6 PyTorch — not adding; GPU necessity no longer planned.
-  - History: Apr 2026 (`c035489`) torch 2.11.0 + CUDA 13 from PyPI, reverted (`ba2b8e4`). If GPU needed again: PyTorch CUDA index via `[tool.uv.sources]` (https://docs.astral.sh/uv/guides/integration/pytorch/).
-  - Breaks without torch: `device="cuda"` runs (`src/possibilistic_portfolio/faster_necessity.py:603`); both `main()`s in `pipeline_wrapper.py`; `comparison_cpu_gpu.py`.
-  - Works without torch: Bayesian averaging, benchmarks, evaluation, notebooks, possibilistic on `device="cpu"`.
-- [x] 3 Formatting — 6 files formatted; all pass `ruff format --check`.
-- [x] 4 Linting — 22 safe fixes; B905 disabled. 11 left on purpose (B023 false positive in `markowitz.py`, F821 in `compute_longonly_weights.py`, scratch-notebook noise).
-- [x] 5 Type checking — Pylance in VS Code, workspace mode.
-- [x] 6 pytest — 3 illustrative tests in `tests/test_markowitz.py`; `.gitignore` narrowed to `src/tests/`.
-- [x] 8 Pre-commit / CI — skipped for now.
-- [x] Type errors 87 → 13, 2026-11-16 (`uvx pyright`, the checker inside Pylance, same `[tool.pyright]` settings). Almost all were already there before the package move: missing `assert x is not None` / type hints in tests, `.values` → `.to_numpy()`, `Sequence` for list arguments. `scipy-stubs` added to the dev group (fixed `multigammaln`; found `_sample_iw_sigmas` crashing for n = 1, fixed with a reshape). `archive/` excluded. No `# pyright: ignore` comments (errors stay visible). Left on purpose:
-  - 9× `import torch` in `faster_necessity.py` — optional, not installed (GPU only).
-  - `np.savez_compressed(path, **result)` in `make_snapshots.py` / `necessity_baseline.py` — numpy's stubs: a dict key could clash with `allow_pickle`.
-  - `multivariate_t(df=5.0)` in `test_bayesian_averaging.py` — scipy-stubs types `df` as int; scipy documents it as float (stub bug).
-  - 14 errors in `analysis.ipynb` — not looked at (notebook).
-
-### Open (low priority)
-- [x] **`faster_necessity.py` has tests** (2026-11-17, `tests/test_faster_necessity.py`, 26 tests; REFACTOR_PLAN 2.8 was skipped while necessity was going to be removed). The 1-D reduction for a fixed Σ (thesis eq. 5.6–5.15) is checked against a brute-force supremum over μ; kernel, mode, Cholesky packing, candidates, score properties, joblib = serial, the three weighting schemes. Found and fixed: `_optimal_z_for_t` returned 0 when the return equals the model mean exactly (d² = 0), giving necessity 1 instead of the true supremum (the GPU code never had that branch). Real data never hits d² = 0 exactly, so results are unchanged (necessity baseline bit for bit). Documented, not changed: the reduction needs n ≥ 2 (for one asset the score is a lower bound).
-- [x] 2.7 / 7 Package layout (`src/possibilistic_portfolio/` + `[build-system]`) — done 2026-11-16 (REFACTOR_PLAN Part 1): `uv_build` backend, absolute imports, `sys.path` hacks removed, all paths from `config.py`.
-- [x] (done 2026-11-17: `markowitz_step` uses `solve` (singular Σ still → NaN row + warning), `minimum_variance_strategy` uses `_solve_or_pinv` and reports rows it can't normalise. Unconstrained weights moved by ≤ 3e-13, forecasts and long-only bit for bit; reference regenerated. The two optional test references: Mahalanobis switched to `solve`, Jorion left on `inv`.) **Replace `np.linalg.inv(A) @ b` with `np.linalg.solve(A, b)`** — faster and more accurate when only `A⁻¹b` is needed (keep `inv` where the full inverse is genuinely needed). ⚠️ Changes floating-point results in the last digits → `tests/test_snapshots.py` (bit-for-bit) will fail; regenerate references, own commit. Occurrences (2026-11-15):
-  - `src/possibilistic_portfolio/markowitz.py:38` (`markowitz_step`) — `inv(sigma_t)` then `@ mu_t` → `solve(sigma_t, mu_t) / theta`. Tie in with the singular-Σ bug above (step 2.1): `solve` still raises on exactly singular Σ, so maybe use `_solve_or_pinv`. Afterwards `test_step_matches_closed_form` would compare `solve` with `solve` → switch its expected value to `inv` (or `cho_solve`) to stay independent.
-  - `src/possibilistic_portfolio/alternative_investment_rules.py:194` (`minimum_variance_strategy`) — `inv(sigma_hat_t) @ ones` → `_solve_or_pinv(sigma_hat_t, np.ones(n))` (helper already in the file, used by Jorion / Kan-Zhou).
-  - `tests/test_alternative_investment_rules.py:139` — reference Jorion; `Si` reused in 3 quadratic forms. Optional (test reference code).
-  - `tests/test_possibilistic_bayesian.py:214` — expected Mahalanobis distance; `solve((S1+S2)/2, d)`. Optional.
-  - **Keep:** `tests/test_distribution_evaluation_functions.py:43` (scipy `mahalanobis` takes the inverse matrix `VI` as input); `pinv` in `src/possibilistic_portfolio/alternative_investment_rules.py:46` (deliberate singular fallback).
-- [x] Write proper tests — done 2026-11-13: one `tests/test_<module>.py` per module + `tests/test_snapshots.py` (REFACTOR_PLAN Part 2).
-- [x] `src/compute_longonly_weights.py` — deleted (long-only now computed in the pipeline); Sharpe test moved to `portfolio_evaluation_functions.py`.
-- [x] `alternative_investment_rules._incomplete_beta_unregularized` — `-> float` function could fall through without returning. Fixed 2026-11-16: dead `if _betainc is not None` branch removed (scipy is always imported), docstring typo fixed.
-- [~] `archive/necessity_archive/annealing.py:326` — invalid `seed` argument. Not fixed (unused old code); `archive/` is excluded from pyright.
-- [x] (done 2026-11-17: `.vscode/*` ignored except `.vscode/settings.json` (ruff on save, Pylance), which can now be committed.) `.gitignore` hides `.vscode/`. (`comparison_cpu_gpu.py`, `compute_longonly_weights.py` deleted, lines removed.)
-- [x] `CLAUDE.md` out of date (lists removed files) — updated 2026-11-16 with the package move (local file, gitignored).
-
-## After the paper — research design (not refactor)
-
-Nothing here blocks the refactor: `[~]` items are modelling / experiment-design decisions left for the paper on purpose.
-
-- [~] **Possibilistic merge: ν of the merged model** (deferred on purpose: a modelling choice for the paper, not a refactor point; the code implements the thesis) — `_merge_two_models` uses ν′ = max(ν₁ + ν₂ − n, n + 2) (thesis eq. 5.5), borrowed from the probabilistic inverse-Wishart. Possibilistic newborns start at ν = 1, so merging two young models jumps ν up to n + 2.
-- [x] **Bayesian averaging: predictive moments are computed after pruning** (closed 2026-11-17, kept: the forecast comes from the pool that is carried forward) — the thesis' Algorithm 1 aggregates first, then prunes; the code prunes, then computes the moments (possibilistic follows its Algorithm 2: aggregate, then prune). Measured on the full 10 Industry VW run: daily Sharpe 0.069206 (code) vs 0.069207 (thesis order), max weight difference 1.7e-3 on weights of typical size 25. Not worth a result change. Side fact: the Bayesian pool holds ~20 models on average (max 41), so the cap of 2000 never binds; the 1e-6 threshold does all the pruning.
-- [x] **Necessity reference** (done 2026-11-17) — `tests/snapshots/reference.npz` regenerated from the final code with `make_snapshots.py --necessity` (70 min, 161 arrays); the FYP-code one is kept as `reference_fyp_code_2026-11-13.npz`. Checked: everything that doesn't depend on necessity equals `reference_no_necessity.npz` bit for bit. `necessity_baseline.npz` (~5 min) is current too. Observation from that run (for the necessity question, not a bug): no model ever gets a necessity score of exactly 0 on either slice (`frac_nec_zero` = 0 at every step; mean score 0.38 real / 0.30 simulated), so the **masked scheme is identical to plain** there; only power and exp differ.
-
-- [~] **Simulated datasets: settings for the extension** (deferred on purpose, decided 2026-11-16: research design for the paper, not a refactor point) (discussed 2026-11-16, step 2.6). Will be revisited and regenerated with new settings later; not changed now (no bug, and changing settings means changing tests).
+- [~] **Possibilistic merge: ν of the merged model** — `_merge_two_models` uses
+  ν′ = max(ν₁ + ν₂ − n, n + 2) (thesis eq. 5.5), borrowed from the probabilistic
+  inverse-Wishart. Possibilistic newborns start at ν = 1, so merging two young
+  models jumps ν up to n + 2. A modelling choice; the code implements the thesis.
+- [~] **Simulated datasets: settings for the extension** (to be regenerated with
+  new settings; changing them means changing tests).
   - A&C (2016) Appendix A, DGP 1 (iid) and DGP 2 (regime) are matched exactly by `simulate_iid` / `simulate_regime_shifts` (RF, factor, B, Σ, p_switch = 0.5, ρ = 0.95, σ_μ = 0.001, σ_g). Differences in the experiment: A&C use **41 datasets per DGP** (Monte Carlo) of **12,000 days**; we use 1 dataset (seed 42) of 10,000 days → one sample path mixes real differences with luck; use several seeds for the paper.
   - A&C's "regime" DGP is effectively a persistent AR(1) mean with jumpy innovations (persistence 0.975/day, half-life ≈ 27 days, moving mean ≈ 10% of factor variance), not discrete Markov regimes — same family as our OU `mean_reverting` DGP.
   - Our OU `mean_reverting` (half-life ≈ 13.5 days, moving mean ≈ 40% of factor variance) and `stochastic_volatility` (vol half-life ≈ 14 days) are far more extreme than the literature (predictive R² ~1–2% monthly, half-lives of months–years; daily vol persistence ≈ 0.98–0.99). Either present them as stress tests or recalibrate towards literature values.
   - `cov_break` average vol ≈ 19% and `stochastic_volatility` average vol ≈ 17.7% (σ̄² is the median of v, not the mean) are not matched to the iid 16%, unlike regime / mean-reverting. Decide whether DGPs should share the unconditional variance.
   - The comment above `_simulate_factor_regime_mean` ("this is weird - better use the ou reversion process") was a wish for an OU mean; it is kept as is (the OU version exists as `simulate_mean_reverting_factor`; the regime helper is A&C's DGP 2 as published).
+
+## Notes for the paper
+
+- **Masked = plain in practice:** on the snapshot slices no model ever got a
+  necessity score of exactly 0 (`frac_nec_zero` = 0 at every step; mean score
+  0.38 real / 0.30 simulated), so the masked scheme equals plain possibility
+  weighting there; only power and exp differ.
+- **Kan-Zhou:** the incomplete-beta parameters follow Kan & Zhou's own paper
+  (eq. 66): B((N−1)/2, (T−N+1)/2) and exponent −(T−2)/2. Anderson & Cheng print
+  the second beta parameter as (w+1)/2, a typo (only (w−n+1)/2 gives the
+  exponent a+b−1 = (w−2)/2). The forecast is (μ\*, Σ̂/h) (A&C fn. 17, K&Z eq. 75),
+  so its log-likelihood / Mahalanobis scores use Σ\* = Σ̂/h (≈ 10% wider than Σ̂
+  for w = 252, n = 11): state this in the paper.
+- **Bayesian averaging prunes before aggregating** (the thesis' Algorithm 1
+  aggregates first; possibilistic follows its Algorithm 2: aggregate, then
+  prune). Measured on the full 10 Industry VW run: daily Sharpe 0.069206 (code)
+  vs 0.069207 (thesis order), max weight difference 1.7e-3 on weights of
+  typical size 25. The Bayesian pool holds ~20 models on average (max 41), so
+  the cap of 2000 never binds; the 1e-6 threshold does all the pruning.
+- **`keep_newest` pruning** (fixed 2026-11-17: the newborn replaces the
+  lowest-ranked kept model, not the youngest): no effect on real data — on the
+  full 10 Industry VW run, with the possibilistic pool at its cap of 100 almost
+  every step, old and new rule give identical forecasts.
+- **FYP results vs now** (changes that move numbers, all deliberate): turnover
+  no longer diluted by NaN rows; benchmarks estimate at t from returns up to
+  and including t (were t−1); historical is truly expanding; possibilistic
+  weights start at `start` (were `burn_in`); every strategy scored on one
+  common window; Bayesian newborn prior divides by t / t−1 (were t−1 / t−2);
+  Kan-Zhou formula and forecast as above; default possibilistic output is
+  plain possibility weighting.

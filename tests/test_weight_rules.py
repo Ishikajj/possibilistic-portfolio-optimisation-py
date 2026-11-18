@@ -44,7 +44,7 @@ def _random_spd(rng: np.random.Generator, n: int) -> np.ndarray:
        FYP condition number. Long-only: 0 optimiser failures in ~2.4M FYP rows.
 
     Huge weights from ill-conditioned Sigmas are an estimation issue, not a
-    Markowitz one (REFACTOR_PLAN 2.1). The exactly singular case is tested
+    Markowitz one. The exactly singular case is tested
     separately (test_singular_sigma_row_is_nan_with_warning).
     """
     A = rng.normal(size=(n, n))
