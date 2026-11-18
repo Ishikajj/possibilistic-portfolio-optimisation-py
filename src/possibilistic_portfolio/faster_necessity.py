@@ -60,6 +60,10 @@ Then
 
 Hence for each fixed Sigma we only solve a 1D optimisation in t.
 
+The reduction needs n >= 2: with one asset there is no direction orthogonal
+to r, so z would have to be 0, and letting it vary makes the score a lower
+bound of the true necessity.
+
 Adaptive covariance search
 ==========================
 The outer supremum over Sigma is approximated adaptively.
@@ -332,7 +336,7 @@ def _build_sigma_cache(
 
 def _optimal_z_for_t(t: float, d2: float, kappa: float) -> float:
     """Closed-form optimizer over the Q-orthogonal radius z for fixed t."""
-    if d2 <= 0.0 or kappa <= 0.0:
+    if kappa <= 0.0:
         return 0.0
 
     log_A = -0.5 * (1.0 - t) ** 2 * d2
