@@ -1,4 +1,10 @@
-"""Tests for bayesian_averaging.py — probabilistic model averaging over NIW models."""
+"""Tests for bayesian_averaging.py — probabilistic model averaging over NIW models.
+
+The pieces shared with the possibilistic method (newborn prior, NIW update,
+burn-in sums, top-models selection) are tested in test_niw.py.
+"""
+
+import inspect
 
 import numpy as np
 import pandas as pd
@@ -6,6 +12,7 @@ import pytest
 from scipy.stats import multivariate_t
 
 from possibilistic_portfolio import bayesian_averaging as ba
+from possibilistic_portfolio import config, niw
 from possibilistic_portfolio.markowitz import markowitz_step
 from possibilistic_portfolio.predictive import StrategyOutput
 
@@ -45,24 +52,16 @@ def returns() -> pd.DataFrame:
 # --- newborn model ---------------------------------------------------------
 
 
-def test_new_model_prior_is_pooled_sample_mean_and_variance():
-    rng = np.random.default_rng(1)
-    R = rng.normal(0.001, 0.01, (50, N))
-    mu_bar, lam_bar = ba._new_model_prior(R.sum(0), (R**2).sum(0), t=50)
-    assert np.isclose(mu_bar, R.mean(0).mean())
-    assert np.isclose(lam_bar, R.var(0, ddof=1).mean())
-
-
 def test_run_core_prior_at_t_sees_the_t_returns_before_t(monkeypatch, returns):
     """At step t, sum_R / sum_R2 hold rows 0 … t-1 (t returns, not R[t])."""
     calls = []
-    real = ba._new_model_prior
+    real = niw.new_model_prior
 
     def spy(sum_R, sum_R2, t):
         calls.append((sum_R.copy(), sum_R2.copy(), t))
         return real(sum_R, sum_R2, t)
 
-    monkeypatch.setattr(ba, "_new_model_prior", spy)
+    monkeypatch.setattr(niw, "new_model_prior", spy)
     ba.run_core(returns, start=40, burn_in=40)
     R = returns.to_numpy()
     assert [t for *_, t in calls] == list(range(40, len(R)))
@@ -91,27 +90,6 @@ def test_marginal_likelihood_of_invalid_scale_is_minus_inf():
         ba._log_marginal_likelihood(np.zeros(N), mu, kappa, -np.eye(N), nu)
         == -np.inf
     )
-
-
-def test_niw_update_is_conjugate_posterior():
-    mu, kappa, Lam, nu = _niw()
-    x = np.array([0.01, -0.02, 0.005])
-    mu1, k1, L1, nu1 = ba._update_niw(x, mu, kappa, Lam, nu)
-    assert np.allclose(mu1, (kappa * mu + x) / (kappa + 1))
-    assert k1 == kappa + 1 and nu1 == nu + 1
-    assert np.allclose(L1, Lam + kappa / (kappa + 1) * np.outer(x - mu, x - mu))
-
-
-def test_update_all_models_updates_in_place():
-    mus, kappas, Lams, nus = _niw_pool(1, 2)
-    x = np.full(N, 0.01)
-    expected = [
-        ba._update_niw(x, mus[m], kappas[m], Lams[m], nus[m]) for m in range(2)
-    ]
-    ba._update_all_models(x, mus, kappas, Lams, nus)
-    for m in range(2):
-        assert np.allclose(mus[m], expected[m][0])
-        assert np.allclose(Lams[m], expected[m][2])
 
 
 def test_append_new_model_uses_common_prior():
@@ -256,16 +234,26 @@ def test_run_core_uses_returns_up_to_t_only(returns):
     assert not np.allclose(pred["mu_hat"][t + 1], pred2["mu_hat"][t + 1])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="TOOLING_TODO bug: keep_newest evicts the highest-index model, not the least probable",
-)
 def test_prune_keep_newest_evicts_least_probable():
+    """Was: the kept model with the highest index (here the most probable)."""
     probs = np.array([0.8, 0.1, 0.9, 1.0, 0.05])
     out = ba._prune_models(
         *_pool(probs / probs.sum()), max_models=3, prune_threshold=0
     )
     assert [m[0] for m in out[0]] == [2, 3, 4]
+
+
+def test_prune_defaults_come_from_config():
+    params = inspect.signature(ba._prune_models).parameters
+    assert params["max_models"].default == config.BAYESIAN_MAX_MODELS
+    assert params["prune_threshold"].default == config.BAYESIAN_PRUNE_THRESHOLD
+    assert params["keep_newest"].default == config.KEEP_NEWEST
+
+
+def test_burn_in_longer_than_the_data_raises(returns):
+    """Was silently shortened to half the data."""
+    with pytest.raises(ValueError, match="burn_in"):
+        ba.run_core(returns, start=500, burn_in=500)
 
 
 def test_theta_reaches_the_weights(returns):

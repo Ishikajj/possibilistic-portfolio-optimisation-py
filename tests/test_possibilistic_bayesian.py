@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from possibilistic_portfolio import bayesian_averaging as ba
 from possibilistic_portfolio import possibilistic_bayesian as pb
 from possibilistic_portfolio.markowitz import markowitz_step
 from possibilistic_portfolio.predictive import StrategyOutput
@@ -68,14 +67,6 @@ def test_new_model_prior_is_pooled_sample_mean_and_variance():
     mu_bar, lam_bar = pb._new_model_prior(R.sum(0), (R**2).sum(0), t=50)
     assert np.isclose(mu_bar, R.mean(0).mean())
     assert np.isclose(lam_bar, R.var(0, ddof=1).mean())
-
-
-def test_new_model_prior_same_as_bayesian():
-    rng = np.random.default_rng(2)
-    R = rng.normal(0.001, 0.01, (30, N))
-    for t in (0, 1, 2, 30):
-        args = (R[:t].sum(0), (R[:t] ** 2).sum(0), t)
-        assert pb._new_model_prior(*args) == ba._new_model_prior(*args)
 
 
 def test_run_core_prior_at_t_sees_the_t_returns_before_t(
@@ -146,17 +137,6 @@ def test_update_possibilities_all_invalid_gives_ones():
         np.zeros(N), mus, kappas, bad, nus, np.ones(2)
     )
     assert np.allclose(out, 1.0)
-
-
-def test_niw_update_identical_to_bayesian():
-    mu, kappa, Lam, nu = _niw()
-    x = np.array([0.01, -0.02, 0.005])
-    for a, b in zip(
-        pb._update_niw(x, mu, kappa, Lam, nu),
-        ba._update_niw(x, mu, kappa, Lam, nu),
-        strict=True,
-    ):
-        assert np.allclose(a, b)
 
 
 # --- pruning ---------------------------------------------------------------

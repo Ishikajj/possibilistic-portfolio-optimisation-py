@@ -9,9 +9,9 @@ Algorithm (per time step)
 1. Birth   — spawn a new NIW model whose prior mean and scale are set to the
              cross-asset average of historical sample moments.
 2. Observe — receive the realised return vector R_t.
-3. Update  — apply the NIW conjugate update (equations 7a/7b) to every model.
-4. Reweight — compute each model's marginal likelihood and update probabilities
+3. Reweight — compute each model's marginal likelihood and update probabilities
               via Bayes' rule; probabilities are normalised to sum to one.
+4. Update  — apply the NIW conjugate update (equations 7a/7b) to every model.
 5. Prune   — discard low-probability models to keep the pool tractable.
 6. Predict — form the BMA predictive mean and covariance as the
              probability-weighted average across models.
@@ -42,6 +42,7 @@ import pandas as pd
 from numpy.linalg import slogdet
 from scipy.special import multigammaln
 
+from possibilistic_portfolio import niw
 from possibilistic_portfolio.config import (
     BAYESIAN_MAX_MODELS,
     BAYESIAN_PRUNE_THRESHOLD,
@@ -112,35 +113,6 @@ def sharing_prior_update(
     return out / s  # makes sure that we normalise the vector to sum to 1.
 
 
-def _new_model_prior(
-    sum_R: np.ndarray, sum_R2: np.ndarray, t: int
-) -> tuple[float, float]:
-    """Scalar prior hyperparameters for the model born at step t.
-
-    The paper's common prior across assets, from the t returns seen so far
-    (rows 0 … t-1; sum_R / sum_R2 don't include R[t] yet):
-    - mean = average across assets of the per-asset sample means
-    - covariance scale = average across assets of the per-asset sample
-      variances (ddof=1)
-
-    Returns (mu_bar, lambda_bar). Same as possibilistic_bayesian._new_model_prior.
-    """
-    if t <= 0:
-        return 0.0, 1e-4
-
-    mu_vec = sum_R / float(t)  # (n,) per-asset sample means
-    mu_bar = float(mu_vec.mean())
-
-    if t <= 1:
-        # Cannot compute sample variance with < 2 observations.
-        return mu_bar, 1e-4
-
-    # Per-asset sample variance: Var(R_i) = (sum R_i^2 - t * mean_i^2) / (t-1)
-    var_vec = (sum_R2 - t * mu_vec**2) / float(t - 1)
-    var_vec = np.maximum(var_vec, 1e-8)
-    return mu_bar, float(var_vec.mean())
-
-
 def _append_new_model(
     mus: list[np.ndarray],
     kappas: list[float],
@@ -150,13 +122,13 @@ def _append_new_model(
     lam_bar: float,
     n: int,
 ) -> None:
-    """takes the previously existing models, and the newly caclulated variance and mean, and appends those to the previously existing models."""
+    """Append the newborn model: the common prior (mu_bar, lam_bar) for every
+    asset, kappa = 1 and nu = n + 2 (the smallest nu whose inverse-Wishart
+    mean exists; Anderson & Cheng start at delta = nu - n - 1 = 1)."""
     mus.append(np.full(n, mu_bar, dtype=float))
     kappas.append(1.0)
     Lambdas.append(lam_bar * np.eye(n, dtype=float))
-    nus.append(
-        float(n + 2.0)
-    )  # paper used delta = 1 at initialisation, and delta = nu - n - 1
+    nus.append(float(n + 2.0))
 
 
 def _update_probs(
@@ -241,34 +213,6 @@ def _log_marginal_likelihood(
     return log_likelihood
 
 
-def _update_all_models(
-    R_t: np.ndarray,
-    mus: list[np.ndarray],
-    kappas: list[float],
-    Lambdas: list[np.ndarray],
-    nus: list[float],
-) -> None:
-    for m in range(len(mus)):
-        mus[m], kappas[m], Lambdas[m], nus[m] = _update_niw(
-            R_t, mus[m], kappas[m], Lambdas[m], nus[m]
-        )
-
-
-def _update_niw(
-    R_t: np.ndarray,
-    mu: np.ndarray,
-    kappa: float,
-    Lambda: np.ndarray,
-    nu: float,
-) -> tuple[np.ndarray, float, np.ndarray, float]:
-    k1 = kappa + 1.0
-    nu1 = nu + 1.0
-    mu1 = (kappa * mu + R_t) / k1
-    d = R_t - mu
-    L1 = Lambda + (kappa / k1) * np.outer(d, d)
-    return mu1, k1, L1, nu1
-
-
 def _ba_moments(
     mus: list[np.ndarray],
     kappas: list[float],
@@ -299,9 +243,9 @@ def _prune_models(
     Lambdas: list[np.ndarray],
     nus: list[float],
     probs: np.ndarray,
-    prune_threshold: float = 1e-6,
-    max_models: int | None = 500,
-    keep_newest: bool = True,
+    prune_threshold: float = BAYESIAN_PRUNE_THRESHOLD,
+    max_models: int | None = BAYESIAN_MAX_MODELS,
+    keep_newest: bool = KEEP_NEWEST,
 ) -> tuple[
     list[np.ndarray],
     list[float],
@@ -311,14 +255,12 @@ def _prune_models(
 ]:
     """Prune low-probability models to keep runtime sub-quadratic in T.
 
-    Strategy:
     - drop models with posterior probability below `prune_threshold`
-    - optionally cap the total number of retained models at `max_models`
-    - optionally force retention of the newest model (last index)
+    - of the rest, keep at most the `max_models` most probable (None = no cap)
+    - with `keep_newest` the newest model (last index) survives both steps;
+      under the cap it takes the place of the least probable kept model
 
-    After pruning, probabilities are renormalized to sum to 1.
-
-    Generally the threshhold is kept to 1e-6 = 0.0001% to prevent numerical issues.
+    After pruning, probabilities are renormalised to sum to 1.
     """
     n_models = len(mus)
 
@@ -327,30 +269,20 @@ def _prune_models(
         keep_mask[-1] = True
 
     keep_idx = np.flatnonzero(keep_mask)
-    if keep_idx.size == 0:
+    if keep_idx.size == 0:  # nothing above the threshold: keep the newest
         fallback_count = (
             n_models if max_models is None else min(n_models, max_models)
         )
         keep_idx = np.arange(n_models - fallback_count, n_models, dtype=int)
 
-    if max_models is not None and keep_idx.size > max_models:
-        order = np.argsort(probs[keep_idx])[
-            ::-1
-        ]  # sorts by descending the probabilities.
-        keep_idx = keep_idx[order[:max_models]]
-        keep_idx = np.sort(keep_idx)
-        if keep_newest and keep_idx[-1] != n_models - 1:
-            keep_idx[-1] = n_models - 1
-            keep_idx = np.unique(np.sort(keep_idx))
-            if keep_idx.size > max_models:
-                drop_candidates = keep_idx[keep_idx != n_models - 1]
-                smallest = drop_candidates[np.argmin(probs[drop_candidates])]
-                keep_idx = keep_idx[keep_idx != smallest]
+    if max_models is not None:
+        keep_idx = keep_idx[
+            niw.top_models(probs[keep_idx], max_models, keep_newest)
+        ]
 
-    mus = [mus[i] for i in keep_idx]
-    kappas = [kappas[i] for i in keep_idx]
-    Lambdas = [Lambdas[i] for i in keep_idx]
-    nus = [nus[i] for i in keep_idx]
+    mus, kappas, Lambdas, nus = niw.select_models(
+        mus, kappas, Lambdas, nus, keep_idx
+    )
     probs = probs[keep_idx].astype(float, copy=False)
 
     prob_sum = probs.sum()
@@ -376,15 +308,16 @@ def run_core(
 
     Input : returns_df — (T, n) numeric excess returns, no RF column.
             start — first row with weights (always passed).
-            burn_in — first rows used only to set the prior.
+            burn_in — first rows used only to set the prior; must be
+                <= start and < T (raises otherwise).
             theta — risk aversion of the Markowitz weights.
             Everything after returns_df is keyword-only; defaults: config.
-    Output: (mu_sigma_dict, weights_df)
-        mu_sigma_dict — {"mu_hat": (T, n), "sigma_hat": (T, n, n)}, NaN before burn-in.
-        weights_df    — Markowitz weights (T, n), aligned to returns_df.index.
+    Output: StrategyOutput(weights, forecast)
+        forecast — {"mu_hat": (T, n), "sigma_hat": (T, n, n), "index"}, NaN
+                   before burn_in (rows burn_in … start-1 are warm-up).
+        weights  — Markowitz weights (T, n), aligned to returns_df.index.
     """
-    R_df = returns_df.copy()
-    R = R_df.values.astype(float)
+    R = returns_df.to_numpy(dtype=float)
     T, n = R.shape
 
     mu_hat_arr = np.full((T, n), np.nan)
@@ -398,22 +331,13 @@ def run_core(
     nus: list[float] = []
     probs = np.array([], dtype=float)
 
-    sum_R = np.zeros(n)
-    sum_R2 = np.zeros(n)
+    sum_R, sum_R2 = niw.burn_in_sums(R, burn_in, start)
 
-    # burn_obs must be an integer for array slicing
-    burn_obs = min(int(burn_in), T // 2)
-    if burn_obs > 0:
-        R_burn = R[:burn_obs]
-        sum_R = R_burn.sum(axis=0)
-        sum_R2 = (R_burn * R_burn).sum(axis=0)
-
-    for t in range(burn_obs, T):
-        if t % 100 == 0:
-            print(f"Processing time step {t} / {T}...")
-        mu_bar, lam_bar = _new_model_prior(
-            sum_R, sum_R2, t
-        )  # Note, this is not using the R[t] yet
+    for t in range(burn_in, T):
+        if t % 1000 == 0:
+            print(f"  bayesian averaging: step {t} / {T}")
+        # prior of the newborn model: returns before t only (not R[t] yet)
+        mu_bar, lam_bar = niw.new_model_prior(sum_R, sum_R2, t)
         _append_new_model(mus, kappas, Lambdas, nus, mu_bar, lam_bar, n)
 
         n_models = len(mus)
@@ -428,7 +352,7 @@ def run_core(
 
         probs = _update_probs(R_t, mus, kappas, Lambdas, nus, probs)
 
-        _update_all_models(R_t, mus, kappas, Lambdas, nus)
+        niw.update_all_models(R_t, mus, kappas, Lambdas, nus)
 
         mus, kappas, Lambdas, nus, probs = _prune_models(
             mus,
@@ -456,7 +380,7 @@ def run_core(
         theta=theta,
     )
 
-    # VERY IMPORTANT: the returned mu_hat_arr and sigma_hat_arr have info upto time t, meaning they are predicting t+1.
+    # Row t of the forecast uses returns up to and including t: it predicts t+1.
     return StrategyOutput(weights, mu_sigma_dict)
 
 
