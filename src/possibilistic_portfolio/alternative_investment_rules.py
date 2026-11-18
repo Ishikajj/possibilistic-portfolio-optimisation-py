@@ -2,16 +2,22 @@
 
 Seven strategies split into two groups:
 
-Weights only (pd.DataFrame):
+Every strategy returns predictive.StrategyOutput(weights, forecast).
+
+Weights only (forecast=None):
   equal_weight_strategy          — 1/N uniform allocation
   market_weight_strategy         — full weight on the market column, zero elsewhere
   minimum_variance_strategy      — rolling sample covariance inversion, no mean input
 
-Predictive moments + weights (tuple[mu_sigma_dict, pd.DataFrame]):
+Predictive moments + weights:
   historical_expectations_weights — expanding-window sample mean/covariance → Markowitz
   rolling_window_weights          — fixed rolling window → Markowitz
   jorion_bayes_stein_strategy     — Jorion (1986) shrinkage toward min-variance mean
   kan_zhou_three_fund_strategy    — Kan & Zhou (2007) three-fund rule with incomplete-beta shrinkage
+
+Formulas for Jorion and Kan-Zhou: Anderson & Cheng (2016), sections 6.6 / 6.7.
+A row they can't estimate (after their start) is left NaN and counted in one
+RuntimeWarning per call.
 
 Signature of every strategy: (returns_df, *, start, window, theta) — all
 keyword-only after returns_df (only the ones a strategy uses). `start`, the
@@ -32,7 +38,11 @@ from scipy.special import (
 
 from possibilistic_portfolio.config import ROLLING_WINDOW_LONG, THETA
 from possibilistic_portfolio.markowitz import markowitz_unconstrained
-from possibilistic_portfolio.predictive import StrategyOutput, make_predictive
+from possibilistic_portfolio.predictive import (
+    StrategyOutput,
+    make_predictive,
+    warn_nan_rows,
+)
 
 
 def _incomplete_beta_unregularized(a: float, b: float, x: float) -> float:
@@ -75,6 +85,53 @@ def _minvar_mean_target(
     mu_g_scalar = float(mu_t @ invSig_1) / denom_1
     mu_g_vec = mu_g_scalar * ones
     return mu_g_scalar, mu_g_vec, denom_1
+
+
+def _shrinkage_target(
+    mu_t: np.ndarray,
+    Sigma_t: np.ndarray,
+    ones: np.ndarray,
+) -> tuple[float, np.ndarray, float, float] | None:
+    """What Jorion and Kan-Zhou both shrink with, for one window.
+
+    Returns (mu_g_scalar, mu_g_vec, denom_1, psi2) — the minimum-variance
+    target (see _minvar_mean_target) and psi2 = d' Sigma^{-1} d, d = mu_t -
+    mu_g (Jorion calls it q) — or None if the target is undefined.
+    """
+    mu_g_scalar, mu_g_vec, denom_1 = _minvar_mean_target(mu_t, Sigma_t, ones)
+    if not np.isfinite(mu_g_scalar):
+        return None
+    d = mu_t - mu_g_vec
+    psi2 = float(d @ _solve_or_pinv(Sigma_t, d))
+    return mu_g_scalar, mu_g_vec, denom_1, psi2
+
+
+def _kan_zhou_adjusted_psi2(psi2: float, n: int, w: int) -> float:
+    """Kan & Zhou's adjusted estimator of psi^2 (their eq. 66; T = w, N = n):
+
+        psi2_a = [(w-n-1) psi2 - (n-1)] / w
+                 + 2 psi2^((n-1)/2) (1 + psi2)^(-(w-2)/2)
+                   / (w * B_x((n-1)/2, (w-n+1)/2)),      x = psi2 / (1 + psi2)
+
+    Anderson & Cheng (2016, section 6.7) print the second beta parameter as
+    (w+1)/2; the original paper has (w-n+1)/2, used here.
+
+    psi2_a is positive by construction and -> 0 as psi2 -> 0: returns 0 for
+    psi2 <= 1e-12 (the mean already equals the target), NaN if the result
+    isn't positive and finite (e.g. the incomplete beta underflows to 0).
+    """
+    if psi2 <= 1e-12:
+        return 0.0
+    a = (n - 1.0) / 2.0
+    B = _incomplete_beta_unregularized(
+        a=a, b=(w - n + 1.0) / 2.0, x=psi2 / (1.0 + psi2)
+    )
+    if not B > 0.0:
+        return float("nan")
+    unbiased = ((w - n - 1.0) * psi2 - (n - 1.0)) / w
+    adjustment = 2.0 * psi2**a * (1.0 + psi2) ** (-(w - 2.0) / 2.0) / (w * B)
+    psi2_a = unbiased + adjustment
+    return psi2_a if np.isfinite(psi2_a) and psi2_a > 0.0 else float("nan")
 
 
 def historical_expectations_weights(
@@ -185,19 +242,25 @@ def minimum_variance_strategy(
     start: int,
     window: int = ROLLING_WINDOW_LONG,
 ) -> StrategyOutput:
-    """Create minimum variance weights from `start` (or `window`, if later)."""
+    """Minimum variance weights Sigma^{-1} 1 / (1' Sigma^{-1} 1) from the
+    rolling sample covariance, from `start` (or `window`, if later)."""
     T, n = returns_df.shape
 
     weights = np.full((T, n), np.nan)
-    end = T - 1  # last row excluded
+    first, end = max(window, start), T - 1  # last row excluded
+    ones = np.ones(n)
+    skipped = {"1' Sigma^{-1} 1 zero or not finite": 0}
 
-    for t in range(max(window, start), end):
+    for t in range(first, end):
         ret_window = returns_df.iloc[t - window + 1 : t + 1]
-        sigma_hat_t = ret_window.cov().values
-        inv_sigma = np.linalg.inv(sigma_hat_t)
-        w = inv_sigma @ np.ones(n)
-        w /= w.sum()  # normalize to sum to 1
-        weights[t] = w
+        w = _solve_or_pinv(ret_window.cov().values, ones)
+        total = w.sum()
+        if total == 0.0 or not np.isfinite(total):
+            skipped["1' Sigma^{-1} 1 zero or not finite"] += 1
+            continue
+        weights[t] = w / total  # normalise to sum to 1
+
+    warn_nan_rows("minimum_variance", skipped, max(end - first, 0))
 
     return StrategyOutput(
         pd.DataFrame(
@@ -214,26 +277,21 @@ def jorion_bayes_stein_estimates(
 ) -> dict[str, np.ndarray]:
     """Compute Jorion (1986) Bayes–Stein shrunk mean/covariance.
 
-    Returns arrays aligned to `returns_df.index`:
+    Returns arrays aligned to `returns_df.index` (NaN before the start):
       - mu_star: (T,n)
       - sigma_star: (T,n,n)
       - v: (T,) shrinkage intensity
       - J: (T,) auxiliary scalar
       - mu_g_scalar: (T,) minimum-variance mean target (scalar)
     """
-    assert isinstance(returns_df, pd.DataFrame)
-
     T, n = returns_df.shape
     w = int(window)
-    if w <= 0:
-        raise ValueError("window must be positive")
     if w <= n + 2:
         raise ValueError(
             f"window must be > n+2 for c=w-n-2 to be positive; got window={w}, n={n}"
         )
 
     start = max(w, start)
-    end = T - 1  # last row excluded (since returns_{t+1} is needed downstream)
 
     mu_star = np.full((T, n), np.nan)
     sigma_star = np.full((T, n, n), np.nan)
@@ -243,8 +301,9 @@ def jorion_bayes_stein_estimates(
 
     ones = np.ones(n)
     c = w - n - 2
+    skipped = {"minimum-variance mean undefined": 0, "q <= 0 or not finite": 0}
 
-    for t in range(start, end):
+    for t in range(start, T):
         ret_window = returns_df.iloc[t - w + 1 : t + 1]
         mu_t = ret_window.mean().to_numpy()
 
@@ -252,17 +311,13 @@ def jorion_bayes_stein_estimates(
         cov_ddof1 = ret_window.cov(ddof=1).values
         Sigma_t = cov_ddof1 * (w - 1) / c
 
-        mu_g_scalar, mu_g_vec, denom_1 = _minvar_mean_target(
-            mu_t, Sigma_t, ones
-        )
-        if not np.isfinite(mu_g_scalar) or not np.isfinite(denom_1):
+        target = _shrinkage_target(mu_t, Sigma_t, ones)
+        if target is None:
+            skipped["minimum-variance mean undefined"] += 1
             continue
-        mu_g_scalar_arr[t] = mu_g_scalar
-
-        d = mu_t - mu_g_vec
-        invSig_d = _solve_or_pinv(Sigma_t, d)
-        q = float(d @ invSig_d)
+        mu_g_scalar, mu_g_vec, denom_1, q = target
         if q <= 0.0 or not np.isfinite(q):
+            skipped["q <= 0 or not finite"] += 1
             continue
 
         v_t = (n + 2.0) / ((n + 2.0) + w * q)
@@ -278,7 +333,9 @@ def jorion_bayes_stein_estimates(
         sigma_star[t] = Sigma_t_star
         v[t] = v_t
         J[t] = J_t
+        mu_g_scalar_arr[t] = mu_g_scalar
 
+    warn_nan_rows("jorion_bayes_stein", skipped, max(T - start, 0))
     return {
         "mu_star": mu_star,
         "sigma_star": sigma_star,
@@ -295,7 +352,8 @@ def jorion_bayes_stein_strategy(
     window: int = ROLLING_WINDOW_LONG,
     theta: float = THETA,
 ) -> StrategyOutput:
-    """Create Jorion's Bayes-Stein weights with burn-in and last-row exclusion."""
+    """Jorion's Bayes-Stein rule: Markowitz weights (1/theta) Sigma*^{-1} mu*
+    from `start` (or `window`, if later)."""
     est = jorion_bayes_stein_estimates(
         returns_df=returns_df,
         window=window,
@@ -305,8 +363,6 @@ def jorion_bayes_stein_strategy(
     mu_sigma_dict = make_predictive(
         est["mu_star"], est["sigma_star"], returns_df.index
     )
-
-    # Use existing pipeline to turn (mu*, Sigma*) into weights
     weights = markowitz_unconstrained(
         mu_sigma_dict=mu_sigma_dict,
         returns_df=returns_df,
@@ -324,27 +380,25 @@ def kan_zhou_three_fund_estimates(
 ) -> dict[str, np.ndarray]:
     """Compute Kan and Zhou (2007) three-fund shrinkage estimates.
 
-    Returns arrays aligned to `returns_df.index`:
+    Returns arrays aligned to `returns_df.index` (NaN before the start):
       - mu_star: (T,n) shrunk mean
       - Sigma: (T,n,n) rolling MLE covariance (c=w)
-      - v: (T,) shrinkage weight
-      - h: scalar constant used in the portfolio rule
-    """
-    assert isinstance(returns_df, pd.DataFrame)
+      - sigma_star: (T,n,n) Sigma / h, the covariance the rule works with
+      - v: (T,) shrinkage weight, in (0, 1]
+      - h: scalar constant of the portfolio rule (one-element array)
 
+    The shrinkage weight is v = n / (n + w * psi2_a), with psi2_a Kan & Zhou's
+    adjusted estimator of psi^2 = (mu - mu_g)' Sigma^{-1} (mu - mu_g), see
+    _kan_zhou_adjusted_psi2.
+    """
     T, n = returns_df.shape
     w = int(window)
-    if w <= 0:
-        raise ValueError("window must be positive")
-    if w <= 2:
-        raise ValueError("window must be > 2")
     if w <= n + 4:
         raise ValueError(
             f"window must be > n+4 for h to be well-defined; got window={w}, n={n}"
         )
 
     start = max(w, start)
-    end = T - 1
 
     h = ((w - n - 1.0) * (w - n - 4.0)) / (w * (w - 2.0))
 
@@ -353,55 +407,46 @@ def kan_zhou_three_fund_estimates(
     v = np.full(T, np.nan)
 
     ones = np.ones(n)
-    a = (n - 1.0) / 2.0
-    b = (w + 1.0) / 2.0
+    skipped = {
+        "minimum-variance mean undefined": 0,
+        "psi^2 negative or not finite": 0,
+        "adjusted psi^2 not positive": 0,
+    }
 
-    for t in range(start, end):
+    for t in range(start, T):
         ret_window = returns_df.iloc[t - w + 1 : t + 1]
         mu_t = ret_window.mean().to_numpy()
 
         # MLE covariance (c=w)
         Sigma_t = ret_window.cov(ddof=0).values
 
-        mu_g_scalar, mu_g_vec, _denom_1 = _minvar_mean_target(
-            mu_t, Sigma_t, ones
-        )
-        if not np.isfinite(mu_g_scalar):
+        target = _shrinkage_target(mu_t, Sigma_t, ones)
+        if target is None:
+            skipped["minimum-variance mean undefined"] += 1
+            continue
+        _, mu_g_vec, _, psi2 = target
+        if not np.isfinite(psi2) or psi2 < 0.0:
+            skipped["psi^2 negative or not finite"] += 1
             continue
 
-        d = mu_t - mu_g_vec
-        invSig_d = _solve_or_pinv(Sigma_t, d)
-        psi_t = float(d @ invSig_d)
-        if not np.isfinite(psi_t) or psi_t < 0.0:
+        psi2_a = _kan_zhou_adjusted_psi2(psi2, n, w)
+        if np.isnan(psi2_a):
+            skipped["adjusted psi^2 not positive"] += 1
             continue
 
-        # If psi is ~0, mu_t already equals the target.
-        if psi_t <= 1e-12:
-            mu_star[t] = mu_g_vec
-            Sigma_arr[t] = Sigma_t
-            v[t] = 1.0
-            continue
-
-        x_t = float(psi_t / (1.0 + psi_t))
-        B_t = _incomplete_beta_unregularized(a=a, b=b, x=x_t)
-        if not np.isfinite(B_t) or B_t <= 0.0:
-            continue
-
-        term1 = ((w - n - 1.0) * psi_t - (n - 1.0)) / w
-        term2_num = 2.0 * (psi_t**a) * ((1.0 + psi_t) ** (-b))
-        term2 = (1.0 / (w * B_t)) * term2_num
-        epsilon_t = term1 + term2
-        if not np.isfinite(epsilon_t):
-            continue
-
-        v_t = n / (w * epsilon_t + n)
-        mu_t_star = (1.0 - v_t) * mu_t + v_t * mu_g_vec
-
-        mu_star[t] = mu_t_star
+        v_t = n / (w * psi2_a + n)  # 1 when psi2_a = 0: mean = target
+        mu_star[t] = (1.0 - v_t) * mu_t + v_t * mu_g_vec
         Sigma_arr[t] = Sigma_t
         v[t] = v_t
 
-    return {"mu_star": mu_star, "Sigma": Sigma_arr, "v": v, "h": np.array([h])}
+    warn_nan_rows("kan_zhou_three_fund", skipped, max(T - start, 0))
+    return {
+        "mu_star": mu_star,
+        "Sigma": Sigma_arr,
+        "sigma_star": Sigma_arr / h,
+        "v": v,
+        "h": np.array([h]),
+    }
 
 
 def kan_zhou_three_fund_strategy(
@@ -411,20 +456,19 @@ def kan_zhou_three_fund_strategy(
     window: int = ROLLING_WINDOW_LONG,
     theta: float = THETA,
 ) -> StrategyOutput:
-    """Kan and Zhou (2007) three-fund rule.
+    """Kan and Zhou (2007) three-fund rule (Anderson & Cheng 2016, section 6.7).
 
-    Implements Section 6.7:
       - mu_t is rolling sample mean over a window of size w
       - Sigma_t uses the MLE covariance with c=w (i.e. divide by w)
       - mu_g is the constant-vector target from the minimum-variance portfolio mean
       - v_t is Kan–Zhou's shrinkage weight (different from Jorion)
       - portfolio rule: (h/theta) * Sigma_t^{-1} * mu_t^*
 
-    Convention: weights at index t are applied to returns at index t+1 (handled elsewhere via shift(-1)).
-
-    Returns:
-      StrategyOutput: weights (same index/columns as `returns_df`) and the
-      forecast (mu = h * mu_star, see below).
+    The forecast is (mu*, Sigma / h): Anderson & Cheng's footnote 17 and Kan &
+    Zhou's eq. 75 read the rule as plain Markowitz on these moments,
+    (1/theta) (Sigma/h)^{-1} mu* = (h/theta) Sigma^{-1} mu*. So the saved mean
+    is mu* itself, and the long-only weights and the scoring use the same
+    forecast as the unconstrained weights.
     """
     est = kan_zhou_three_fund_estimates(
         returns_df=returns_df,
@@ -432,15 +476,9 @@ def kan_zhou_three_fund_strategy(
         start=start,
     )
 
-    h = float(est["h"][0])
-
-    # Encode (h/theta) factor by scaling the mean: (h/theta) Sigma^{-1} mu_star
-    # = (1/theta) Sigma^{-1} (h * mu_star).
-    mu_tilde = h * est["mu_star"]
-    sigma_hat = est["Sigma"]
-
-    mu_sigma_dict = make_predictive(mu_tilde, sigma_hat, returns_df.index)
-
+    mu_sigma_dict = make_predictive(
+        est["mu_star"], est["sigma_star"], returns_df.index
+    )
     weights = markowitz_unconstrained(
         mu_sigma_dict=mu_sigma_dict,
         returns_df=returns_df,

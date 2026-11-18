@@ -4,6 +4,8 @@ Window timing: estimates at t use the w returns up to and including t, i.e.
 iloc[t-w+1 : t+1] (`_window_rows`). Until 2026-11-16 they stopped at t-1.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -73,6 +75,27 @@ def test_minvar_mean_target_is_gmv_portfolio_mean():
     assert np.isclose(denom, ones @ np.linalg.solve(S, ones))
 
 
+def test_shrinkage_target_psi2_and_undefined_target():
+    rng = np.random.default_rng(2)
+    A = rng.normal(size=(N, N))
+    S, mu, ones = A @ A.T + np.eye(N), rng.normal(size=N), np.ones(N)
+    mu_g, mu_g_vec, denom, psi2 = air._shrinkage_target(mu, S, ones)
+    d = mu - mu_g_vec
+    assert np.isclose(psi2, d @ np.linalg.solve(S, d))
+    assert (mu_g, denom) == air._minvar_mean_target(mu, S, ones)[::2]
+    # 1' Sigma^{-1} 1 = 0 → no target
+    assert air._shrinkage_target(mu, np.zeros((N, N)), ones) is None
+
+
+def test_kan_zhou_adjusted_psi2_edge_cases(monkeypatch):
+    assert air._kan_zhou_adjusted_psi2(0.0, n=N, w=30) == 0.0
+    assert air._kan_zhou_adjusted_psi2(1e-13, n=N, w=30) == 0.0
+    assert air._kan_zhou_adjusted_psi2(0.5, n=N, w=30) > 0.0
+    # incomplete beta of 0 used to divide by zero → NaN (row skipped)
+    monkeypatch.setattr(air, "_incomplete_beta_unregularized", lambda **kw: 0.0)
+    assert np.isnan(air._kan_zhou_adjusted_psi2(0.5, n=N, w=30))
+
+
 # --- weights-only strategies ---------------------------------------------
 
 
@@ -108,6 +131,25 @@ def test_minimum_variance(returns):
 def test_minimum_variance_window_longer_than_burn_in_delays_start(returns):
     w = air.minimum_variance_strategy(returns, start=FIRST, window=80).weights
     _assert_nan_layout(w, 80)
+
+
+def _with_dead_window(returns: pd.DataFrame, win: int) -> pd.DataFrame:
+    """Rows 60 … 99 set to zero: the windows ending at 60+win-1 … 99 have a
+    zero covariance, which no benchmark can invert."""
+    dead = returns.copy()
+    dead.iloc[60:100] = 0.0
+    return dead
+
+
+def test_minimum_variance_reports_rows_it_cannot_compute(returns):
+    """Was np.linalg.inv: a singular window stopped the whole run."""
+    win = 30
+    with pytest.warns(RuntimeWarning, match="minimum_variance: 11 of 69 rows"):
+        w = air.minimum_variance_strategy(
+            _with_dead_window(returns, win), start=FIRST, window=win
+        ).weights
+    assert w.iloc[89:100].isna().all().all()
+    assert w.iloc[FIRST:89].notna().all().all()
 
 
 # --- moment-based strategies ----------------------------------------------
@@ -189,25 +231,76 @@ def test_jorion_rejects_too_short_window(returns):
         air.jorion_bayes_stein_estimates(returns, start=FIRST, window=N + 2)
 
 
-def test_kan_zhou_estimates(returns):
+def test_jorion_and_kan_zhou_forecast_every_row_from_start(returns):
+    """The last row has a forecast (for the day after the data) like every
+    other predictive strategy; only its weights are NaN."""
+    for strategy in (
+        air.jorion_bayes_stein_strategy,
+        air.kan_zhou_three_fund_strategy,
+    ):
+        pred, w = _fw(strategy(returns, start=FIRST, window=30))
+        assert np.isfinite(pred["mu_hat"][FIRST:]).all()
+        assert np.isfinite(pred["sigma_hat"][FIRST:]).all()
+        _assert_nan_layout(w, FIRST)
+
+
+def test_jorion_reports_rows_it_cannot_estimate(returns):
+    win = 30
+    with pytest.warns(RuntimeWarning) as caught:
+        est = air.jorion_bayes_stein_estimates(
+            _with_dead_window(returns, win), start=FIRST, window=win
+        )
+    message = str(caught[0].message)
+    assert "jorion_bayes_stein: 11 of 70 rows left NaN" in message
+    assert "minimum-variance mean undefined: 11" in message
+    assert np.isnan(est["mu_star"][89:100]).all()
+    assert np.isfinite(est["mu_star"][FIRST:89]).all()
+
+
+def _kan_zhou_by_hand(rows: pd.DataFrame):
+    """Kan & Zhou (2007) eq. 66 / 75 written out independently (T = w, N = n);
+    the incomplete beta function by numerical integration."""
+    w, n = rows.shape
+    mu = rows.mean().to_numpy()
+    S = rows.cov(ddof=0).to_numpy()
+    ones = np.ones(n)
+    Si = np.linalg.inv(S)
+    mu_g = (ones @ Si @ mu) / (ones @ Si @ ones)
+    psi2 = (mu - mu_g) @ Si @ (mu - mu_g)
+    a, b = (n - 1) / 2, (w - n + 1) / 2
+    B, _ = quad(
+        lambda y: y ** (a - 1) * (1 - y) ** (b - 1), 0, psi2 / (1 + psi2)
+    )
+    psi2_a = ((w - n - 1) * psi2 - (n - 1)) / w + 2 * psi2 ** ((n - 1) / 2) * (
+        1 + psi2
+    ) ** (-(w - 2) / 2) / (w * B)
+    v = n / (n + w * psi2_a)
+    return (1 - v) * mu + v * mu_g, S, v
+
+
+def test_kan_zhou_matches_paper_formulas(returns):
     win = 30
     est = air.kan_zhou_three_fund_estimates(returns, start=FIRST, window=win)
-    t = 70
-    rows = _window_rows(returns, t, win)
-    S = rows.cov(ddof=0).to_numpy()
-    assert np.allclose(est["Sigma"][t], S)  # MLE covariance (divide by w)
-    _, mu_g_vec, _ = air._minvar_mean_target(
-        rows.mean().to_numpy(), S, np.ones(N)
-    )
-    v = est["v"][t]
-    assert np.allclose(
-        est["mu_star"][t], (1 - v) * rows.mean().to_numpy() + v * mu_g_vec
-    )
+    for t in (70, 95):
+        mu_star, S, v = _kan_zhou_by_hand(_window_rows(returns, t, win))
+        assert np.isclose(est["v"][t], v)
+        assert np.allclose(est["mu_star"][t], mu_star)
+        assert np.allclose(est["Sigma"][t], S)  # MLE covariance (divide by w)
     h = ((win - N - 1) * (win - N - 4)) / (win * (win - 2))
     assert np.isclose(est["h"][0], h)
+    assert np.allclose(est["sigma_star"], est["Sigma"] / h, equal_nan=True)
 
 
-def test_kan_zhou_strategy_scales_mean_by_h(returns):
+def test_kan_zhou_shrinkage_weight_is_between_0_and_1(returns):
+    """The adjusted estimator of psi^2 is positive, so v can't leave (0, 1)."""
+    est = air.kan_zhou_three_fund_estimates(returns, start=FIRST, window=30)
+    v = est["v"][FIRST:]
+    assert ((v > 0) & (v < 1)).all()
+
+
+def test_kan_zhou_forecast_is_mu_star_and_sigma_over_h(returns):
+    """The saved mean is mu* itself (was h * mu*, which the scoring and the
+    long-only weights then used); h sits in the covariance: Sigma / h."""
     win = 30
     est = air.kan_zhou_three_fund_estimates(returns, start=FIRST, window=win)
     pred, w = _fw(
@@ -215,15 +308,34 @@ def test_kan_zhou_strategy_scales_mean_by_h(returns):
             returns, start=FIRST, window=win, theta=2.0
         )
     )
-    assert np.allclose(
-        pred["mu_hat"], est["h"][0] * est["mu_star"], equal_nan=True
-    )
+    h = est["h"][0]
+    assert np.allclose(pred["mu_hat"], est["mu_star"], equal_nan=True)
+    assert np.allclose(pred["sigma_hat"], est["Sigma"] / h, equal_nan=True)
     _assert_nan_layout(w, FIRST)
     t = 80
-    expected = (
-        est["h"][0] / 2.0 * np.linalg.solve(est["Sigma"][t], est["mu_star"][t])
-    )
+    # the three-fund rule: (h / theta) Sigma^{-1} mu*
+    expected = h / 2.0 * np.linalg.solve(est["Sigma"][t], est["mu_star"][t])
     assert np.allclose(w.iloc[t], expected)
+
+
+def test_kan_zhou_reports_rows_it_cannot_estimate(returns):
+    win = 30
+    with pytest.warns(RuntimeWarning) as caught:
+        est = air.kan_zhou_three_fund_estimates(
+            _with_dead_window(returns, win), start=FIRST, window=win
+        )
+    message = str(caught[0].message)
+    assert "kan_zhou_three_fund: 11 of 70 rows left NaN" in message
+    assert "minimum-variance mean undefined: 11" in message
+    assert np.isnan(est["mu_star"][89:100]).all()
+
+
+def test_clean_benchmark_runs_give_no_warning(returns):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        air.minimum_variance_strategy(returns, start=FIRST, window=30)
+        air.jorion_bayes_stein_strategy(returns, start=FIRST, window=30)
+        air.kan_zhou_three_fund_strategy(returns, start=FIRST, window=30)
 
 
 def test_kan_zhou_rejects_too_short_window(returns):

@@ -21,6 +21,8 @@ labels, same order); the timing above is a convention, enforced by those tests.
 
 StrategyOutput   — what every algorithm returns: weights + forecast (None for
                    weight-only strategies).
+warn_nan_rows    — the one warning an algorithm gives for rows it had to leave
+                   NaN after it started (counts per reason).
 make_predictive  — build the dict; every algorithm uses it, so "index" is always set.
 check_aligned    — raise unless the forecast's index equals the returns' index.
 save_predictive  — write <algo>_predictive.npz (mu_hat, sigma_hat, index) to a run folder.
@@ -28,6 +30,7 @@ load_predictive  — read it back; falls back to the old <algo>_mus.npy / _sigma
                    (runs before 2026-11-16, no index: matched by position only).
 """
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,6 +45,26 @@ class StrategyOutput:
 
     weights: pd.DataFrame
     forecast: dict | None = None
+
+
+def warn_nan_rows(
+    source: str, skipped: dict[str, int], n_rows: int, what: str = "rows"
+) -> None:
+    """Warn once that `source` left rows NaN, with the count per reason.
+
+    Rows that are NaN by design (before the start, the last weights row) are
+    not the caller's business here; `skipped` counts only rows that should
+    have had a value. Nothing happens when all counts are zero.
+    """
+    total = sum(skipped.values())
+    if total == 0:
+        return
+    reasons = ", ".join(f"{k}: {v}" for k, v in skipped.items() if v)
+    warnings.warn(
+        f"{source}: {total} of {n_rows} {what} left NaN ({reasons})",
+        RuntimeWarning,
+        stacklevel=3,  # the caller of the algorithm
+    )
 
 
 def make_predictive(
