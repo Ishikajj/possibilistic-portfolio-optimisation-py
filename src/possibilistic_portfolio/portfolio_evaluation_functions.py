@@ -11,6 +11,8 @@ rolling_sharpe_ratio    — rolling Sharpe time series, optionally annualised.
 certainty_equivalent    — mean-variance certainty equivalent (needs RF).
 average_turnover        — mean daily sum of absolute weight changes, optionally annualised.
 sharpe_difference_test  — GMM / Newey-West test of a Sharpe-ratio difference.
+mean_difference_test    — Diebold-Mariano / Newey-West test of a difference in
+                          the mean of a per-period score (log-likelihood, turnover).
 compare_to_benchmark    — sharpe_difference_test for several strategies vs one benchmark.
 """
 
@@ -280,6 +282,68 @@ def sharpe_difference_test(
         outperforms=bool(t_stat > critical),
         underperforms=bool(t_stat < -critical),
         p_approx=float(2.0 * norm.sf(abs(t_stat))),
+    )
+
+
+class MeanDifferenceTestResult(NamedTuple):
+    mean_a: float  # mean score of a over the compared periods
+    mean_b: float  # mean score of b
+    difference: float  # mean_a - mean_b
+    t_statistic: float  # Newey-West t-stat on the difference
+    a_higher: bool  # a's mean significantly higher
+    b_higher: bool  # b's mean significantly higher
+    p_approx: float  # approximate two-sided p-value (normal)
+    n_obs: int  # periods compared
+
+
+def mean_difference_test(
+    series_a: pd.Series,
+    series_b: pd.Series,
+    n_lags: int = 22,
+    confidence: float = 0.95,
+) -> MeanDifferenceTestResult:
+    """Test whether two strategies' mean per-period scores differ.
+
+    Diebold & Mariano (1995): d_t = a_t - b_t on the periods where both are
+    finite (matched by index label), t = mean(d) / sqrt(S / T) with S the
+    Newey-West long-run variance of d (`n_lags` lags, Bartlett weights, as
+    in sharpe_difference_test). Works for any per-period score, e.g. the
+    daily log-likelihood or turnover. Whether a higher mean is better
+    depends on the score; `a_higher` / `b_higher` only report the direction.
+    """
+    idx = series_a.index.intersection(series_b.index)
+    a = series_a.loc[idx].to_numpy(dtype=float)
+    b = series_b.loc[idx].to_numpy(dtype=float)
+    both = np.isfinite(a) & np.isfinite(b)
+    a, b = a[both], b[both]
+    d = a - b
+
+    T = len(d)
+    if T < max(n_lags + 2, 10):
+        raise ValueError(
+            f"Too few observations ({T}) for Newey-West with {n_lags} lags."
+        )
+
+    d_hat = float(d.mean())
+    long_run_var = float(_newey_west_cov(d[:, None], n_lags)[0, 0])
+    se_d = np.sqrt(max(long_run_var, 0.0) / T)
+    if se_d > 0:
+        t_stat = d_hat / se_d
+    elif d_hat == 0:
+        t_stat = 0.0  # identical series: no difference (p = 1)
+    else:
+        t_stat = np.sign(d_hat) * np.inf
+
+    critical = norm.ppf(1.0 - (1.0 - confidence) / 2.0)
+    return MeanDifferenceTestResult(
+        mean_a=float(a.mean()),
+        mean_b=float(b.mean()),
+        difference=d_hat,
+        t_statistic=float(t_stat),
+        a_higher=bool(t_stat > critical),
+        b_higher=bool(t_stat < -critical),
+        p_approx=float(2.0 * norm.sf(abs(t_stat))),
+        n_obs=T,
     )
 
 

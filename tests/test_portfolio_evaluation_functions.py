@@ -7,12 +7,14 @@ import pandas as pd
 import pytest
 
 from possibilistic_portfolio.portfolio_evaluation_functions import (
+    MeanDifferenceTestResult,
     SharpeTestResult,
     _newey_west_cov,
     average_turnover,
     calculate_sharpe_ratio,
     certainty_equivalent,
     compare_to_benchmark,
+    mean_difference_test,
     portfolio_returns,
     rolling_sharpe_ratio,
     sharpe_difference_test,
@@ -240,6 +242,56 @@ def test_sharpe_difference_aligns_on_common_index():
     res_full = sharpe_difference_test(a.iloc[100:], b)
     res_cut = sharpe_difference_test(a.iloc[100:], b.iloc[100:])
     assert res_full == res_cut
+
+
+# --- mean difference (Diebold-Mariano) -------------------------------------
+
+
+def test_mean_difference_without_lags_is_the_paired_z_test():
+    rng = np.random.default_rng(6)
+    a = pd.Series(rng.normal(0.1, 1.0, 400))
+    b = pd.Series(rng.normal(0.0, 1.0, 400))
+    res = mean_difference_test(a, b, n_lags=0)
+    d = (a - b).to_numpy()
+    assert isinstance(res, MeanDifferenceTestResult)
+    assert np.isclose(res.difference, d.mean())
+    assert np.isclose(res.t_statistic, d.mean() / np.sqrt(d.var() / len(d)))
+    assert (res.mean_a, res.mean_b, res.n_obs) == (a.mean(), b.mean(), 400)
+
+
+def test_mean_difference_detects_a_shift_and_is_antisymmetric():
+    rng = np.random.default_rng(7)
+    noise = pd.Series(rng.normal(0.0, 1.0, 2000))
+    a, b = noise + rng.normal(0.2, 0.5, 2000), noise
+    ab, ba = mean_difference_test(a, b), mean_difference_test(b, a)
+    assert ab.a_higher and not ab.b_higher
+    assert ba.b_higher and not ba.a_higher
+    assert np.isclose(ab.t_statistic, -ba.t_statistic)
+    assert ab.p_approx < 0.05
+
+
+def test_mean_difference_identical_series_is_no_difference():
+    s = pd.Series(np.random.default_rng(8).normal(size=300))
+    res = mean_difference_test(s, s.copy())
+    assert res.t_statistic == 0.0 and res.p_approx == 1.0
+    assert not res.a_higher and not res.b_higher
+
+
+def test_mean_difference_uses_common_finite_periods():
+    rng = np.random.default_rng(9)
+    a = pd.Series(rng.normal(size=500))
+    b = pd.Series(rng.normal(size=500))
+    a_gaps = a.copy()
+    a_gaps.iloc[:50] = np.nan  # e.g. warm-up rows
+    res = mean_difference_test(a_gaps, b.iloc[20:])  # b starts later
+    assert res == mean_difference_test(a.iloc[50:], b.iloc[50:])
+    assert res.n_obs == 450
+
+
+def test_mean_difference_rejects_too_few_observations():
+    s = pd.Series(np.arange(15.0))
+    with pytest.raises(ValueError, match="Too few observations"):
+        mean_difference_test(s, s * 2, n_lags=22)
 
 
 def test_sharpe_difference_rejects_too_few_observations():

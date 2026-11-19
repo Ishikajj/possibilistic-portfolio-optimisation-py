@@ -6,22 +6,21 @@ plan and the done items of this file are in commit `599c77a`
 
 ## Open
 
-- [ ] **Fresh baseline run** (defaults: no merging, no necessity; all
-  algorithms, real + simulated) from a clean commit into `results_2026-11-19`
-  (~30 min), so its `config.json` names an exact commit; then evaluate it
-  (`evaluation_pipeline <folder>`, writes `scalars.csv`) and point the
-  notebooks at it (next item). `results_merge0.15` (real + simulated,
-  2026-11-19 at `599c77a`, was `results_2026-11-20`) is the same with merging
-  at 0.15: keep it as the merging-on run of the ablation. Delete the old
-  `results_baseline/` (2026-11-17, `411052a + uncommitted changes`).
-- [ ] **Notebooks** (`analysis.ipynb`, `predictive_diagnostics.ipynb`):
-  `analysis.ipynb` hard-codes `RESULTS_DIR = Path("results")` (relative, not
-  from `config.py`): point it at `results_2026-11-19`. Strategy
-  lists lack `possibilistic_plain`; the diagnostics cell does
-  `set_index("t")` and reads `nec_mean`, but new runs index the diagnostics by
-  Date and only have necessity columns with `--necessity`; some cells load the
-  old `*_mus.npy` / `*_sigmas.npy` (new runs: `<algo>_predictive.npz`, read with
-  `predictive.load_predictive`).
+- [ ] **Delete `results_baseline/`** (2026-11-17, `411052a + uncommitted
+  changes`): replaced by `results_2026-11-19` (the baseline: defaults, all
+  algorithms, real + simulated, `d9d44db`, evaluated). `results_merge0.15`
+  (same with merging at 0.15, `599c77a`) is the merging-on run of the ablation.
+- [ ] **`predictive_diagnostics.ipynb`**: same fixes as `analysis.ipynb` got
+  (2026-11-19): run folder from `config.ROOT`, `possibilistic_plain` instead of
+  the necessity schemes, `predictive.load_predictive` instead of the old
+  `*_mus.npy` / `*_sigmas.npy`, diagnostics indexed by Date (no `"t"`, no
+  `nec_*` without `--necessity`).
+- [ ] **`analysis.ipynb` narrative** (code is current; the text is the FYP's):
+  update the percentages in cells 18 / 23 (now: turnover −51% / −69%, Sharpe
+  cost 7.2% / 2.2%, unconstrained / long-only); cell 5 says BMA merges (it
+  doesn't); cell 10 says Student-t predictive (scoring is Gaussian); the
+  Mahalanobis heatmap says "lower is better" (calibrated ≈ √n: BMA's lower
+  value means a too-wide Σ).
 - [ ] **`plot_weight_distributions.py`**: `RESULTS_DIR` points at a results folder
   that may not exist; `STRATEGIES` only covers Bayesian + possibilistic, though
   `GROUP_COLOURS` lists benchmark groups too.
@@ -35,6 +34,37 @@ Minor tidying (no effect on results; fix when next in those files):
 - [ ] `pipeline_wrapper.py` (~920 lines): run record (`config.json`, `run.log`, resume) into its own module; one driver for the real and simulated loops.
 - [ ] Rolling-window slice `iloc[t-w+1 : t+1]` written 5 times (historical, rolling, Jorion, Kan-Zhou, min-var): one helper.
 - [ ] Simulated CSVs read in two places with different column rules (pipeline: `Asset*`; Table 1: all but `Date`): one `simulated_datasets.load_sim`.
+
+## Research directions (one branch each, merged into `post-fyp` when done)
+
+- [ ] **Possibilistic over-confidence on simulated data** (branch
+  `research/sim-overconfidence`). Mean Mahalanobis d²/n = 2.50 on every
+  simulated DGP (calibrated = 1; historical / Jorion / Kan-Zhou ≈ 1.0, BMA
+  1.40), but ≈ 1.0 on real data; same in the FYP results (2.51 / 2.51 / 2.02
+  masked / exp / power), so not from the refactor. The pool is always exactly
+  the 100 newest models on simulated data (ν from 2 to 101, `nu_mean` = 51.5
+  at every step); on real data it sometimes keeps older models (`nu_mean` up
+  to 365) but also falls back to the newest 100. Unverified guess: older
+  models' possibilities collapse relative to the newborns (or underflow to
+  ties) and pruning keeps the newest; simulated returns are ~3× more volatile
+  (daily sd ≈ 0.03 vs 0.01). May also drive possibilistic's lower turnover and
+  smoother means in general.
+- [ ] **Anderson & Cheng's integral** (branch `research/ac-integral`): add the
+  integral as defined in Anderson & Cheng (2016) and see how the results
+  change. *Which equation (number) to confirm before starting.*
+- [ ] **Why possibilistic allocations are more stable** (branch
+  `research/sharing-prior`). Hypothesis: the perfect sharing prior in BMA forces
+  the models to redistribute probability mass at every step (sum
+  constraint); the uninformed possibilistic prior has no such constraint.
+  Experiment: sweep BMA's sharing-prior parameter and plot Sharpe and turnover
+  against it, with possibilistic as a reference point; then the other priors
+  Anderson & Cheng use.
+- [ ] **Robust Bayesian averaging** (branch `research/robust-bayes`): A&C's
+  robust BA under probability and under possibility, and whether it fits the
+  possibilistic framework.
+- [ ] **Model drift after ~12,000 periods** (branch `research/model-drift`):
+  appears inherent (not tied to a time period) after about 12,000 periods;
+  find out why.
 
 ## After the paper — research design
 
@@ -53,21 +83,29 @@ Minor tidying (no effect on results; fix when next in those files):
 ## Notes for the paper
 
 - **Merging ablation (2026-11-19) → merging off by default.** Possibilistic
-  with merging at 0.15 (FYP) vs off vs 0.224 (Bhattacharyya overlap 95%), on
-  the 16 real datasets then finished in `results_merge0.15`; Newey-West
-  Sharpe-difference test (`sharpe_difference_test`, 22 lags), all scored from
-  row 1000. Average log-likelihood ranks off > 0.15 > 0.224 on **all 16**
-  datasets (≈ 0.06 per day between neighbours). Sharpe, 0.15 vs off:
-  significant at 5% on 4/16 (unconstrained) and 2/16 (long-only), every one
-  in favour of off (largest: 6 size–STR EW t = −5.4, VW t = −4.0). 0.15 vs
-  0.224: 3/16 significant (unconstrained), all in favour of 0.15. Likely
-  cause: a merged model adds both models' κ and ν although merge candidates
-  (similar ν) have seen mostly the same days, so it is over-confident.
-  Merging was ~90% of possibilistic's run time (3 min → ~20 s per dataset).
-  The 0.15 threshold has no recorded source. Kept as an option:
-  `RunSettings(merge_threshold=0.15)`. Datasets overlap (EW / VW of the same
-  portfolios) and each is one sample path, so read it as a consistent
-  pattern, not 16 independent results.
+  with merging at 0.15 (FYP, `results_merge0.15`) vs off (`results_2026-11-19`)
+  on all 26 datasets (`merge_ablation.ipynb`; Newey-West, 22 lags, Sharpe:
+  `sharpe_difference_test`, daily log-likelihood and turnover:
+  `mean_difference_test`, Diebold-Mariano). Real data (20): log-likelihood
+  better without merging on 20/20, significant on **19/20**; Sharpe
+  significant 6/20 (unconstrained) and 2/20 (long-only), all in favour of off,
+  none in favour of merging; turnover slightly lower with merging (significant
+  7/20, mean −1.3 on ~80, ~1.5%). Simulated (6): no measurable difference.
+  Calibration (mean d²/n) ≈ 1.0 for both on real data. A first look on 16
+  datasets also had 0.224 (BC 95%) worse than 0.15 on log-likelihood 16/16.
+  Likely cause: a merged model adds both models' κ and ν although merge
+  candidates (similar ν) have seen mostly the same days, so it is
+  over-confident. Merging was ~90% of possibilistic's run time (3 min → ~20 s
+  per dataset). The 0.15 threshold has no recorded source. Kept as an option:
+  `--merge-threshold H` / `RunSettings(merge_threshold=H)`. Datasets overlap
+  (EW / VW of the same portfolios) and each is one sample path, so read it as
+  a consistent pattern, not 20 independent results. Optional extra: 0.10 and
+  0.224 runs (`--algorithms possibilistic --merge-threshold H`), picked up by
+  the notebook automatically.
+- **Headline results hold after the fixes** (`results_2026-11-19`, 20 real
+  datasets, possibilistic vs BMA, means): turnover −51% unconstrained / −69%
+  long-only, Sharpe −7.2% / −2.2% (FYP: ~−50% / ~−69%, ~6.7% / ~3.4%);
+  avg log-likelihood 39.38 vs 37.21. Significance not tested yet.
 
 - **Masked = plain in practice:** on the snapshot slices no model ever got a
   necessity score of exactly 0 (`frac_nec_zero` = 0 at every step; mean score

@@ -906,11 +906,22 @@ def _cli() -> None:
         action="store_true",
         help="possibilistic: also run the necessity schemes (slow)",
     )
+    parser.add_argument(
+        "--merge-threshold",
+        type=float,
+        default=MERGE_THRESHOLD,
+        metavar="H",
+        help="possibilistic: merge models whose Hellinger distance is below "
+        "H (default: no merging; the FYP used 0.15)",
+    )
     args = parser.parse_args()
     run = main_simulated if args.simulated else main
     run(
         ROOT / args.out,  # an absolute --out stays as it is
-        settings=RunSettings(necessity=args.necessity or USE_NECESSITY),
+        settings=RunSettings(
+            necessity=args.necessity or USE_NECESSITY,
+            merge_threshold=args.merge_threshold,
+        ),
         algorithms=args.algorithms or RUN_ALGORITHMS,
         resume=args.resume,
     )

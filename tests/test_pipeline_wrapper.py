@@ -681,3 +681,18 @@ def test_resume_refuses_a_folder_with_other_data(tmp_path):
         pw.calculate_all_functions_perdatasets(
             data.iloc[:-5], "ds", **run, resume_done=set()
         )
+
+
+# --- command line ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("argv", "merge_threshold"),
+    [([], None), (["--merge-threshold", "0.15"], 0.15)],
+)
+def test_cli_merge_threshold(monkeypatch, argv, merge_threshold):
+    calls = []
+    monkeypatch.setattr(pw, "main", lambda *a, **k: calls.append(k))
+    monkeypatch.setattr("sys.argv", ["pipeline_wrapper", *argv])
+    pw._cli()
+    assert calls[0]["settings"].merge_threshold == merge_threshold
