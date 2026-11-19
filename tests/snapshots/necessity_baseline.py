@@ -10,7 +10,9 @@ Usage (from dev/):
   uv run python tests/snapshots/necessity_baseline.py --compare tests/snapshots/necessity_baseline.npz
 
 necessity_baseline.npz (gitignored) was made 2026-11-16 just before the
-package move (commit 516b013) and matched after it.
+package move (commit 516b013) and matched after it. Regenerated 2026-11-19
+when merging was switched off by default (run_core's defaults are used here,
+so every scheme changed; the necessity code itself didn't).
 """
 
 from __future__ import annotations

@@ -45,11 +45,18 @@ every deliberate change since:
      inv(Sigma) @ b: unconstrained weights (and the metrics from them) moved
      by at most 3e-13; forecasts and long-only weights bit for bit.
   `possibilistic_diagnostics` has no necessity columns any more.
+- 2026-11-19 merging off by default (merge_threshold None, was 0.15).
+  Only possibilistic_plain (+ long-only) changed: forecasts, weights, their
+  columns in log_likelihood / mahalanobis / rolling_sharpe, their rows in
+  scalars, and possibilistic_diagnostics (hellinger_avg now NaN). Every
+  other strategy bit for bit (checked per column).
 
 tests/snapshots/reference.npz is the same run with real necessity
 (`make_snapshots.py --necessity`, ~70 min; regenerated 2026-11-17 from the
 final code, the FYP-code one is kept as reference_fyp_code_2026-11-13.npz).
-Whatever doesn't depend on necessity is identical in the two references.
+It still has merging at 0.15 (not regenerated after 2026-11-19), so its
+possibilistic outputs differ from a --necessity run of today's code; the rest
+is identical in the two references.
 tests/snapshots/necessity_baseline.py is the cheap check of the necessity
 path (~5 min).
 

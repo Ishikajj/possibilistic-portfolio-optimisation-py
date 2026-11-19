@@ -109,7 +109,7 @@ Open `analysis.ipynb` and point `RESULTS_DIR` to your results folder. Run top to
 
 ## Notes
 
-- Runtime: the default run takes about 4 minutes per dataset (~11 600 trading days, 11 assets, laptop CPU), most of it the possibilistic method (~3 min). With `--necessity` the possibilistic run takes roughly 90 minutes per dataset. The main controls are `max_models` (pruning) and `merge_threshold` / `nu_bandwidth` (merging).
+- Runtime: with the defaults the possibilistic method takes about 20 seconds per dataset (~11 600 trading days, 11 assets, laptop CPU). Merging similar models (off by default; `merge_threshold`) makes it about 3 minutes, and `--necessity` roughly 90 minutes. The main controls are `max_models` (pruning) and, when merging is on, `merge_threshold` / `nu_bandwidth`.
 - `pipeline_wrapper.py` and `evaluation_pipeline.py` are designed to be run in sequence; the evaluation step expects the folder structure that the pipeline step produces.
 - The code is an installable package (`src/possibilistic_portfolio/`, installed by `uv sync`). Import modules as `from possibilistic_portfolio import possibilistic_bayesian`; all paths come from `config.py`, so scripts work from any directory.
 - Tests: `uv run pytest`.

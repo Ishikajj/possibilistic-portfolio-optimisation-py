@@ -22,7 +22,8 @@ Algorithm (per time step t):
 5. Update    — apply conjugate NIW update to every model
 6. Aggregate — form predictive (mu, Sigma) under each weighting scheme
 7. Prune     — keep top max_models by possibility
-8. Merge     — merge similar models by Hellinger distance to reduce redundancy
+8. Merge     — (optional, off by default) merge similar models by Hellinger
+               distance to reduce redundancy
 
 Entry point: run_core(returns_df, ...) — returns (diag_df, forecasts),
 forecasts = {scheme: forecast dict}, one per weighting scheme.
@@ -396,7 +397,7 @@ def _merge_models(
     Lambdas: list[np.ndarray],
     nus: list[float],
     possibilities: np.ndarray,
-    merge_threshold: float = MERGE_THRESHOLD,
+    merge_threshold: float | None = MERGE_THRESHOLD,
     nu_bandwidth: int = NU_BANDWIDTH,
     k_neighbours: int = K_NEIGHBOURS,
     distance_fn: Callable[..., float] = _gaussian_hellinger_distance,
@@ -417,8 +418,11 @@ def _merge_models(
     Returns the updated pool and, as a diagnostic, the average distance of
     the last search (the final pool, in which nothing merged); NaN with
     fewer than two models.
+
+    `merge_threshold=None` turns merging off (the default): the pool comes
+    back unchanged, the distance search doesn't run, and the distance is NaN.
     """
-    if len(mus) < 2:
+    if merge_threshold is None or len(mus) < 2:
         return mus, kappas, Lambdas, nus, possibilities, np.nan
 
     n = len(mus[0])
@@ -602,7 +606,7 @@ def run_core(
     burn_in: int = BURN_IN,
     max_models: int = POSSIBILISTIC_MAX_MODELS,
     keep_newest: bool = KEEP_NEWEST,
-    merge_threshold: float = MERGE_THRESHOLD,
+    merge_threshold: float | None = MERGE_THRESHOLD,
     nu_bandwidth: int = NU_BANDWIDTH,
     k_neighbours: int = K_NEIGHBOURS,
     necessity: bool = USE_NECESSITY,
@@ -620,11 +624,14 @@ def run_core(
             burn_in: rows burn_in … start-1 are warm-up (learning, no weights).
         burn_in: periods used to initialise sum_R / sum_R2 before model birth
             begins; must be <= start and < T (raises otherwise).
-        merge_threshold: Hellinger distance below which two models are merged.
+        merge_threshold: Hellinger distance below which two models are
+            merged; None (the default) = no merging.
         max_models: maximum pool size after pruning each step.
         keep_newest: if True, always retain the newborn model after pruning.
-        nu_bandwidth: max |nu_i - nu_j| for two models to be merge candidates.
-        k_neighbours: number of forward neighbours scanned per model during merging.
+        nu_bandwidth: max |nu_i - nu_j| for two models to be merge candidates
+            (merging only).
+        k_neighbours: number of forward neighbours scanned per model during
+            merging (merging only).
         necessity: also compute necessity scores and the three schemes built
             on them ("masked", "power", "exp"). Off by default (slow).
         gamma: power exponent for power weighting scheme (necessity only).
@@ -634,8 +641,8 @@ def run_core(
 
     Returns (diag_df, forecasts):
         diag_df    — per-step diagnostics from burn_in on, indexed like the
-                     returns (model counts, nu, Hellinger average; with
-                     necessity also its statistics)
+                     returns (model counts, nu, Hellinger average (NaN
+                     without merging); with necessity also its statistics)
         forecasts  — weighting scheme -> forecast {"mu_hat": (T,n),
                      "sigma_hat": (T,n,n), "index"}: "plain", plus
                      NECESSITY_SCHEMES with necessity.
@@ -700,7 +707,7 @@ def run_core(
         for scheme, (mu, Sigma) in forecasts.items():
             mu_hat[scheme][t], sigma_hat[scheme][t] = mu, Sigma
 
-        # 5. prune, then merge similar models
+        # 5. prune, then merge similar models (no-op when merging is off)
         mus, kappas, Lambdas, nus, possibilities = _prune_models(
             mus,
             kappas,

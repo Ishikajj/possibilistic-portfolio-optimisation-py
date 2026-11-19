@@ -302,6 +302,20 @@ def test_merge_reports_average_distance_of_the_final_pool():
     assert np.isnan(single[5])
 
 
+def test_merge_threshold_none_returns_the_pool_unchanged(monkeypatch):
+    """None = merging off: no distance search, pool as given, distance NaN."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("distance search ran with merging off")
+
+    monkeypatch.setattr(pb, "_closest_pair", boom)
+    mu, _, Lam, _ = _niw()
+    pool = ([mu, mu], [1.0, 1.0], [Lam, Lam], [20.0, 20.0], np.ones(2))
+    out = pb._merge_models(*pool, merge_threshold=None)
+    assert len(out[0]) == 2  # identical models, still not merged
+    assert out[4] is pool[4] and np.isnan(out[5])
+
+
 def test_closest_pair_picks_the_closest_candidates():
     mu, _, Lam, _ = _niw()
     pool = ([mu, mu + 1.0, mu + 1e-3], [Lam] * 3, [20.0, 21.0, 22.0])
@@ -410,6 +424,31 @@ def test_run_core_does_not_score_necessity_by_default(monkeypatch, returns):
 
     monkeypatch.setattr(pb, "necessity_scores_fast", boom)
     pb.run_core(returns, **RUN)
+
+
+def test_run_core_does_not_merge_by_default(monkeypatch, returns):
+    def boom(*args, **kwargs):
+        raise AssertionError("distance search ran with merging off")
+
+    monkeypatch.setattr(pb, "_closest_pair", boom)
+    diag, _ = pb.run_core(returns, **RUN)
+    assert (diag["n_models_post_merge"] == diag["n_models_post_prune"]).all()
+    assert diag["hellinger_avg"].isna().all()
+
+
+def test_run_core_merging_off_equals_threshold_zero(returns):
+    """None skips the search; 0 searches but never merges: same forecasts."""
+    off = pb.run_core(returns, **RUN, merge_threshold=None)[1]["plain"]
+    zero = pb.run_core(returns, **RUN, merge_threshold=0.0)[1]["plain"]
+    for key in ("mu_hat", "sigma_hat"):
+        np.testing.assert_array_equal(off[key], zero[key])
+
+
+def test_run_core_merges_with_a_threshold(returns):
+    diag, forecasts = pb.run_core(returns, **RUN, merge_threshold=0.9)
+    assert (diag["n_models_post_merge"] < diag["n_models_post_prune"]).any()
+    assert diag["hellinger_avg"].notna().any()
+    assert np.isfinite(forecasts["plain"]["mu_hat"][RUN["burn_in"] :]).all()
 
 
 def test_necessity_adds_schemes_and_leaves_plain_unchanged(

@@ -68,7 +68,11 @@ BAYESIAN_PRUNE_THRESHOLD = 1e-6
 
 # Possibilistic model averaging
 POSSIBILISTIC_MAX_MODELS = 100
-MERGE_THRESHOLD = 0.15  # Hellinger distance below which models merge
+# Merging of similar models: optional and off by default (None) since
+# 2026-11-19; at the FYP value 0.15 it lowered the average log-likelihood on
+# all 16 real datasets tested (TOOLING_TODO). A float = the Hellinger distance
+# below which two models merge.
+MERGE_THRESHOLD: float | None = None
 NU_BANDWIDTH = 50  # max |nu_i - nu_j| for merge candidates
 K_NEIGHBOURS = 5  # forward neighbours scanned per model when merging
 

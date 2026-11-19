@@ -136,7 +136,7 @@ class RunSettings:
     bayesian_max_models: int = BAYESIAN_MAX_MODELS
     bayesian_prune_threshold: float = BAYESIAN_PRUNE_THRESHOLD
     possibilistic_max_models: int = POSSIBILISTIC_MAX_MODELS
-    merge_threshold: float = MERGE_THRESHOLD
+    merge_threshold: float | None = MERGE_THRESHOLD  # None = no merging
     nu_bandwidth: int = NU_BANDWIDTH
     k_neighbours: int = K_NEIGHBOURS
     necessity: bool = USE_NECESSITY  # also run masked / power / exp
